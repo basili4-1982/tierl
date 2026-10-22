@@ -265,6 +265,7 @@ paths:
               items:
                 - { label: Go }
                 - { label: Rust, image_url: 'https://cdn.example.com/img/rust.png' }
+                - { label: Zig }
       responses:
         '201':
           description: Опрос создан.
@@ -389,6 +390,7 @@ paths:
               placements:
                 - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
                 - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, tier_id: 7a1c2d3e-0000-4000-8000-000000000003 }
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03, tier_id: 7a1c2d3e-0000-4000-8000-000000000002 }
       responses:
         '201':
           description: Ответ принят.
@@ -439,6 +441,7 @@ paths:
               placements:
                 - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000002 }
                 - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03, tier_id: 7a1c2d3e-0000-4000-8000-000000000003 }
       responses:
         '200':
           description: Ответ заменён.
@@ -874,13 +877,13 @@ components:
       type: object
       required: [name, color]
       properties:
-        name: { type: string, minLength: 1, maxLength: 30 }
+        name: { type: string, minLength: 1, maxLength: 40 }
         color: { type: string, pattern: '^#[0-9a-fA-F]{6}$', description: HEX-цвет тира. }
     ItemInput:
       type: object
       required: [label]
       properties:
-        label: { type: string, minLength: 1, maxLength: 100 }
+        label: { type: string, minLength: 1, maxLength: 80 }
         image_url:
           type: [string, 'null']
           format: uri
@@ -912,8 +915,14 @@ components:
       required: [title, visibility, tiers, items]
       properties:
         title: { type: string, minLength: 1, maxLength: 120 }
-        description: { type: string, maxLength: 2000, default: '' }
+        description: { type: string, maxLength: 1000, default: '' }
         visibility: { $ref: '#/components/schemas/Visibility' }
+        slug:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{3,64}$'
+          description: >-
+            Обязателен для public, задаётся автором. Для unlisted не передаётся:
+            сервер генерирует случайный slug, переданное значение игнорируется.
         tiers:
           type: array
           minItems: 2
@@ -921,15 +930,15 @@ components:
           items: { $ref: '#/components/schemas/TierInput' }
         items:
           type: array
-          minItems: 2
-          maxItems: 100
+          minItems: 3
+          maxItems: 50
           items: { $ref: '#/components/schemas/ItemInput' }
     TierlistPatch:
       type: object
       minProperties: 1
       properties:
         title: { type: string, minLength: 1, maxLength: 120 }
-        description: { type: string, maxLength: 2000 }
+        description: { type: string, maxLength: 1000 }
         visibility: { $ref: '#/components/schemas/Visibility' }
         tiers:
           type: array
@@ -938,8 +947,8 @@ components:
           items: { $ref: '#/components/schemas/TierInput' }
         items:
           type: array
-          minItems: 2
-          maxItems: 100
+          minItems: 3
+          maxItems: 50
           items: { $ref: '#/components/schemas/ItemInput' }
     Tierlist:
       type: object
@@ -997,8 +1006,11 @@ components:
       properties:
         placements:
           type: array
-          description: По одному размещению на каждый элемент опроса.
-          minItems: 1
+          description: >-
+            Только размещённые элементы; неразмещённые считаются пропущенными
+            и в сравнении не участвуют. Минимум 3 размещения (SPEC, «Ответы»).
+            Каждый элемент и тир должны принадлежать опросу, элемент не повторяется.
+          minItems: 3
           items: { $ref: '#/components/schemas/Placement' }
     Submission:
       type: object
