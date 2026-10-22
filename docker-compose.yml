@@ -6,6 +6,9 @@ services:
     environment:
       TIERL_HTTP_ADDR: ":8080"
       TIERL_DATABASE_URL: "postgres://tierl:tierl@postgres:5432/tierl?sslmode=disable"
+      TIERL_MIGRATE_ON_START: "true"
+      # Dev-only salt; use a random secret outside local development.
+      TIERL_IP_HASH_SALT: "dev-only-ip-hash-salt-change-me"
     depends_on:
       postgres:
         condition: service_healthy

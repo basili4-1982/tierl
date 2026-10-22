@@ -23,8 +23,14 @@ const (
 
 // Run serves HTTP on ln until ctx is cancelled, then shuts down gracefully.
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger, ln net.Listener) error {
+	deps, closeDeps, err := setup(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer closeDeps()
+
 	srv := &http.Server{
-		Handler:           web.NewHandler(),
+		Handler:           web.NewHandler(deps),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

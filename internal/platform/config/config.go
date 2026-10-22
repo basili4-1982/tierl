@@ -14,6 +14,9 @@ const (
 	defaultHTTPAddr        = ":8080"
 	defaultLogLevel        = "info"
 	defaultShutdownTimeout = 10 * time.Second
+
+	defaultCreateTierlistBurst    = 10
+	defaultCreateTierlistInterval = 30 * time.Second
 )
 
 // Config holds all runtime settings of the service.
@@ -28,6 +31,16 @@ type Config struct {
 	Argon2MemoryKiB   uint32
 	Argon2Iterations  uint32
 	Argon2Parallelism uint8
+
+	// IPHashSalt salts the IP hash used as a rate limit key (TIERL_IP_HASH_SALT).
+	// It is required whenever the database is enabled.
+	IPHashSalt string
+	// CreateTierlistBurst is how many tier lists one IP may create in a row
+	// (TIERL_RATELIMIT_CREATE_TIERLIST_BURST, default 10).
+	CreateTierlistBurst int
+	// CreateTierlistInterval is the refill time of one creation token
+	// (TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL, default 30s).
+	CreateTierlistInterval time.Duration
 }
 
 // Load reads settings through getenv (os.Getenv in production) so tests need no real environment.
@@ -40,6 +53,10 @@ func Load(getenv func(string) string) (Config, error) {
 		Argon2MemoryKiB:   64 * 1024,
 		Argon2Iterations:  3,
 		Argon2Parallelism: 2,
+
+		IPHashSalt:             getenv("TIERL_IP_HASH_SALT"),
+		CreateTierlistBurst:    defaultCreateTierlistBurst,
+		CreateTierlistInterval: defaultCreateTierlistInterval,
 	}
 
 	for _, v := range []struct {
@@ -60,6 +77,27 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("%s: must be a positive integer that fits %d bits", v.name, v.bits)
 		}
 		v.set(n)
+	}
+
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_CREATE_TIERLIST_BURST")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_CREATE_TIERLIST_BURST: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_CREATE_TIERLIST_BURST: must be positive")
+		}
+		cfg.CreateTierlistBurst = n
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL: must be positive")
+		}
+		cfg.CreateTierlistInterval = d
 	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {
@@ -85,6 +123,10 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("TIERL_SHUTDOWN_TIMEOUT: must be positive")
 		}
 		cfg.ShutdownTimeout = d
+	}
+
+	if cfg.DatabaseURL != "" && strings.TrimSpace(cfg.IPHashSalt) == "" {
+		return Config{}, errors.New("TIERL_IP_HASH_SALT: required when TIERL_DATABASE_URL is set")
 	}
 
 	return cfg, nil

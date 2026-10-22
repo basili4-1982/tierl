@@ -32,6 +32,10 @@ func TestLoad_Overrides(t *testing.T) {
 		"TIERL_DATABASE_URL":     "postgres://x",
 		"TIERL_LOG_LEVEL":        "debug",
 		"TIERL_SHUTDOWN_TIMEOUT": "3s",
+		"TIERL_IP_HASH_SALT":     "salt",
+
+		"TIERL_RATELIMIT_CREATE_TIERLIST_BURST":    "3",
+		"TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL": "2m",
 	}))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -41,6 +45,19 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 	if cfg.LogLevel != slog.LevelDebug || cfg.ShutdownTimeout != 3*time.Second {
 		t.Errorf("unexpected cfg: %+v", cfg)
+	}
+	if cfg.IPHashSalt != "salt" || cfg.CreateTierlistBurst != 3 || cfg.CreateTierlistInterval != 2*time.Minute {
+		t.Errorf("unexpected rate limit cfg: %+v", cfg)
+	}
+}
+
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CreateTierlistBurst != 10 || cfg.CreateTierlistInterval != 30*time.Second {
+		t.Errorf("defaults = %d / %v", cfg.CreateTierlistBurst, cfg.CreateTierlistInterval)
 	}
 }
 
@@ -52,6 +69,12 @@ func TestLoad_Invalid(t *testing.T) {
 		"bad argon2 memory":    {"TIERL_ARGON2_MEMORY_KIB": "lots"},
 		"zero argon2 iters":    {"TIERL_ARGON2_ITERATIONS": "0"},
 		"huge argon2 threads":  {"TIERL_ARGON2_PARALLELISM": "300"},
+		"empty salt with db":   {"TIERL_DATABASE_URL": "postgres://x"},
+		"blank salt with db":   {"TIERL_DATABASE_URL": "postgres://x", "TIERL_IP_HASH_SALT": "  "},
+		"bad burst":            {"TIERL_RATELIMIT_CREATE_TIERLIST_BURST": "many"},
+		"zero burst":           {"TIERL_RATELIMIT_CREATE_TIERLIST_BURST": "0"},
+		"bad interval":         {"TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL": "soon"},
+		"zero interval":        {"TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL": "0s"},
 	}
 	for name, vars := range tests {
 		t.Run(name, func(t *testing.T) {
