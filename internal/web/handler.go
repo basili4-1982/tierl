@@ -3,12 +3,15 @@ package web
 
 import (
 	"net/http"
+
+	"github.com/basili4-1982/tierl/internal/web/static"
 )
 
 // NewHandler returns the root HTTP handler.
 func NewHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
+	mux.Handle("/", static.Handler(static.FS()))
 	return mux
 }
 

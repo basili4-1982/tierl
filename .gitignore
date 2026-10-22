@@ -2,3 +2,6 @@
 *.out
 /bin/
 .idea/
+node_modules/
+/internal/web/static/dist/*
+!/internal/web/static/dist/.gitkeep

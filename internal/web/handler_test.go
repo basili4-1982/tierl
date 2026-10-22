@@ -26,3 +26,12 @@ func TestHealthz_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
 }
+
+func TestUnknownAPIPathIsNotSPA(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nothing", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
