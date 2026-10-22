@@ -17,6 +17,9 @@ const (
 
 	defaultCreateTierlistBurst    = 10
 	defaultCreateTierlistInterval = 30 * time.Second
+
+	defaultStorageFSPath = "./data/media"
+	defaultStoragePublic = "/media"
 )
 
 // Config holds all runtime settings of the service.
@@ -41,6 +44,31 @@ type Config struct {
 	// CreateTierlistInterval is the refill time of one creation token
 	// (TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL, default 30s).
 	CreateTierlistInterval time.Duration
+
+	Storage StorageConfig
+}
+
+// Storage backends.
+const (
+	StorageFS = "fs"
+	StorageS3 = "s3"
+)
+
+// StorageConfig selects and configures the image storage (internal/media).
+type StorageConfig struct {
+	// Type is "fs" (default) or "s3" (TIERL_STORAGE_TYPE).
+	Type string
+	// FSPath is the directory for the fs backend (TIERL_STORAGE_FS_PATH).
+	FSPath string
+	// PublicURL is the base URL images are served from (TIERL_STORAGE_PUBLIC_URL).
+	PublicURL string
+
+	S3Endpoint  string // TIERL_S3_ENDPOINT, host:port without scheme
+	S3Bucket    string // TIERL_S3_BUCKET
+	S3AccessKey string // TIERL_S3_ACCESS_KEY
+	S3SecretKey string // TIERL_S3_SECRET_KEY
+	S3Region    string // TIERL_S3_REGION
+	S3UseSSL    bool   // TIERL_S3_USE_SSL
 }
 
 // Load reads settings through getenv (os.Getenv in production) so tests need no real environment.
@@ -129,7 +157,48 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("TIERL_IP_HASH_SALT: required when TIERL_DATABASE_URL is set")
 	}
 
+	st, err := loadStorage(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Storage = st
+
 	return cfg, nil
+}
+
+func loadStorage(getenv func(string) string) (StorageConfig, error) {
+	st := StorageConfig{
+		Type:        strings.ToLower(strings.TrimSpace(valueOr(getenv("TIERL_STORAGE_TYPE"), StorageFS))),
+		FSPath:      valueOr(getenv("TIERL_STORAGE_FS_PATH"), defaultStorageFSPath),
+		PublicURL:   valueOr(getenv("TIERL_STORAGE_PUBLIC_URL"), defaultStoragePublic),
+		S3Endpoint:  strings.TrimSpace(getenv("TIERL_S3_ENDPOINT")),
+		S3Bucket:    strings.TrimSpace(getenv("TIERL_S3_BUCKET")),
+		S3AccessKey: getenv("TIERL_S3_ACCESS_KEY"),
+		S3SecretKey: getenv("TIERL_S3_SECRET_KEY"),
+		S3Region:    strings.TrimSpace(getenv("TIERL_S3_REGION")),
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_S3_USE_SSL")); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return StorageConfig{}, fmt.Errorf("TIERL_S3_USE_SSL: %w", err)
+		}
+		st.S3UseSSL = b
+	}
+	switch st.Type {
+	case StorageFS:
+	case StorageS3:
+		for name, v := range map[string]string{
+			"TIERL_S3_ENDPOINT": st.S3Endpoint, "TIERL_S3_BUCKET": st.S3Bucket,
+			"TIERL_S3_ACCESS_KEY": st.S3AccessKey, "TIERL_S3_SECRET_KEY": st.S3SecretKey,
+		} {
+			if v == "" {
+				return StorageConfig{}, fmt.Errorf("%s: required when TIERL_STORAGE_TYPE=s3", name)
+			}
+		}
+	default:
+		return StorageConfig{}, fmt.Errorf("TIERL_STORAGE_TYPE: %q is not fs or s3", st.Type)
+	}
+	return st, nil
 }
 
 func valueOr(v, fallback string) string {

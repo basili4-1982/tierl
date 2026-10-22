@@ -117,3 +117,56 @@ func TestLoad_Argon2(t *testing.T) {
 		t.Errorf("unexpected overrides: %+v", cfg)
 	}
 }
+
+func TestLoad_Storage(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Storage.Type != StorageFS || cfg.Storage.FSPath != "./data/media" || cfg.Storage.PublicURL != "/media" {
+		t.Errorf("defaults: %+v", cfg.Storage)
+	}
+
+	cfg, err = Load(env(map[string]string{
+		"TIERL_STORAGE_TYPE": "S3", "TIERL_S3_ENDPOINT": "minio:9000", "TIERL_S3_BUCKET": "b",
+		"TIERL_S3_ACCESS_KEY": "a", "TIERL_S3_SECRET_KEY": "s", "TIERL_S3_USE_SSL": "true", "TIERL_S3_REGION": "eu",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := cfg.Storage
+	if st.Type != StorageS3 || st.S3Endpoint != "minio:9000" || st.S3Bucket != "b" ||
+		st.S3AccessKey != "a" || st.S3SecretKey != "s" || !st.S3UseSSL || st.S3Region != "eu" {
+		t.Errorf("s3: %+v", st)
+	}
+}
+
+func TestLoad_StorageInvalid(t *testing.T) {
+	full := map[string]string{
+		"TIERL_STORAGE_TYPE": "s3", "TIERL_S3_ENDPOINT": "e", "TIERL_S3_BUCKET": "b",
+		"TIERL_S3_ACCESS_KEY": "a", "TIERL_S3_SECRET_KEY": "s",
+	}
+	with := func(k, v string) map[string]string {
+		m := map[string]string{}
+		for kk, vv := range full {
+			m[kk] = vv
+		}
+		m[k] = v
+		return m
+	}
+	tests := map[string]map[string]string{
+		"unknown type":  {"TIERL_STORAGE_TYPE": "ftp"},
+		"bad ssl":       with("TIERL_S3_USE_SSL", "maybe"),
+		"no endpoint":   with("TIERL_S3_ENDPOINT", ""),
+		"no bucket":     with("TIERL_S3_BUCKET", ""),
+		"no access key": with("TIERL_S3_ACCESS_KEY", ""),
+		"no secret key": with("TIERL_S3_SECRET_KEY", ""),
+	}
+	for name, vars := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(vars)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
