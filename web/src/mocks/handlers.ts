@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { takeTierlistHandlers } from '../features/take-tierlist/handlers';
 import type { components } from '../api/schema';
 import { authHandlers } from '../features/auth/mocks';
+import { tierlistEditorHandlers } from '../features/tierlist-editor/mocks';
 
 type CsrfToken = components['schemas']['CsrfToken'];
 
@@ -9,5 +10,7 @@ type CsrfToken = components['schemas']['CsrfToken'];
 export const handlers = [
   http.get('/api/v1/csrf', () => HttpResponse.json<CsrfToken>({ csrf_token: 'test-csrf-token' })),
   ...authHandlers,
+  // Editor first: it answers for lists created in the session and passes the rest on.
+  ...tierlistEditorHandlers,
   ...takeTierlistHandlers,
 ];

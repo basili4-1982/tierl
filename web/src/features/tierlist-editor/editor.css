@@ -1,0 +1,163 @@
+.te {
+  max-width: 72rem;
+}
+.te-layout {
+  display: grid;
+  gap: 2rem;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 60rem) {
+  .te-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.te label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.te input[type='text'],
+.te input[type='url'],
+.te textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.4rem;
+}
+.te input[type='color'] {
+  width: 3rem;
+  height: 2.4rem;
+  padding: 0;
+}
+.te button {
+  font: inherit;
+  padding: 0.4rem 0.8rem;
+  min-height: 2.4rem;
+  cursor: pointer;
+}
+.te button:disabled {
+  cursor: not-allowed;
+}
+.te fieldset {
+  border: 1px solid #bbb;
+  margin: 1rem 0;
+  padding: 0.75rem;
+}
+.te-field {
+  margin-bottom: 0.75rem;
+}
+.te-error {
+  color: #b00020;
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+.te-hint {
+  color: #555;
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+.te-summary {
+  border: 2px solid #b00020;
+  padding: 0.75rem;
+  margin: 1rem 0;
+}
+.te-notice {
+  border: 2px solid #1b6e2d;
+  padding: 0.75rem;
+  margin: 1rem 0;
+}
+.te-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.te-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.te-list > li {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #ddd;
+}
+@media (min-width: 40rem) {
+  .te-list > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+}
+.te-danger {
+  background: #b00020;
+  color: #fff;
+  border: 1px solid #7a0016;
+}
+.te-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 10;
+}
+.te-dialog {
+  background: #fff;
+  color: #111;
+  max-width: 28rem;
+  width: 100%;
+  padding: 1.25rem;
+  border-radius: 0.5rem;
+}
+.te-tiers {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+.te-tier {
+  display: flex;
+  min-height: 3rem;
+  border: 1px solid #333;
+  margin-bottom: 2px;
+}
+.te-tier-name {
+  flex: 0 0 5rem;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  padding: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.te-tier-body {
+  flex: 1;
+  background: #1f1f1f;
+}
+.te-pool {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.te-chip {
+  border: 1px solid #888;
+  padding: 0.25rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: #fff;
+  color: #111;
+}
+.te-chip img {
+  width: 2rem;
+  height: 2rem;
+  object-fit: cover;
+}
+:focus-visible {
+  outline: 3px solid #1a73e8;
+  outline-offset: 2px;
+}
