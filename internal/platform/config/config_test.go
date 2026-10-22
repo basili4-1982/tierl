@@ -49,6 +49,9 @@ func TestLoad_Invalid(t *testing.T) {
 		"bad log level":        {"TIERL_LOG_LEVEL": "loud"},
 		"bad timeout":          {"TIERL_SHUTDOWN_TIMEOUT": "soon"},
 		"non-positive timeout": {"TIERL_SHUTDOWN_TIMEOUT": "0s"},
+		"bad argon2 memory":    {"TIERL_ARGON2_MEMORY_KIB": "lots"},
+		"zero argon2 iters":    {"TIERL_ARGON2_ITERATIONS": "0"},
+		"huge argon2 threads":  {"TIERL_ARGON2_PARALLELISM": "300"},
 	}
 	for name, vars := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -70,5 +73,24 @@ func TestLoad_MigrateOnStart(t *testing.T) {
 	}
 	if _, err = Load(env(map[string]string{"TIERL_MIGRATE_ON_START": "maybe"})); err == nil {
 		t.Fatal("want error for invalid value")
+	}
+}
+
+func TestLoad_Argon2(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Argon2MemoryKiB != 65536 || cfg.Argon2Iterations != 3 || cfg.Argon2Parallelism != 2 {
+		t.Errorf("unexpected defaults: %+v", cfg)
+	}
+	cfg, err = Load(env(map[string]string{
+		"TIERL_ARGON2_MEMORY_KIB": "19456", "TIERL_ARGON2_ITERATIONS": "2", "TIERL_ARGON2_PARALLELISM": "1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Argon2MemoryKiB != 19456 || cfg.Argon2Iterations != 2 || cfg.Argon2Parallelism != 1 {
+		t.Errorf("unexpected overrides: %+v", cfg)
 	}
 }
