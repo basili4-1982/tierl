@@ -494,6 +494,8 @@ export interface components {
             /** @default  */
             description: string;
             visibility: components["schemas"]["Visibility"];
+            /** @description Обязателен для public, задаётся автором. Для unlisted не передаётся: сервер генерирует случайный slug, переданное значение игнорируется. */
+            slug?: string;
             tiers: components["schemas"]["TierInput"][];
             items: components["schemas"]["ItemInput"][];
         };
@@ -549,7 +551,7 @@ export interface components {
             tier_id: string;
         };
         SubmissionInput: {
-            /** @description По одному размещению на каждый элемент опроса. */
+            /** @description Только размещённые элементы; неразмещённые считаются пропущенными и в сравнении не участвуют. Минимум 3 размещения (SPEC, «Ответы»). Каждый элемент и тир должны принадлежать опросу, элемент не повторяется. */
             placements: components["schemas"]["Placement"][];
         };
         Submission: {
