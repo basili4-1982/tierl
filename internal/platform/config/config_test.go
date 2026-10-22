@@ -58,3 +58,17 @@ func TestLoad_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_MigrateOnStart(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil || cfg.MigrateOnStart {
+		t.Fatalf("default: %v %+v", err, cfg)
+	}
+	cfg, err = Load(env(map[string]string{"TIERL_MIGRATE_ON_START": "true"}))
+	if err != nil || !cfg.MigrateOnStart {
+		t.Fatalf("true: %v %+v", err, cfg)
+	}
+	if _, err = Load(env(map[string]string{"TIERL_MIGRATE_ON_START": "maybe"})); err == nil {
+		t.Fatal("want error for invalid value")
+	}
+}
