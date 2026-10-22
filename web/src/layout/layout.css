@@ -1,0 +1,115 @@
+.layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.content {
+  flex: 1;
+}
+.content:focus {
+  outline: none;
+}
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -4rem;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-radius: var(--radius);
+}
+.skip-link:focus {
+  top: 0.5rem;
+}
+.site-header {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.site-header__inner {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0.5rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+.brand {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+.nav-link {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.nav-link:hover {
+  background: var(--color-hover);
+}
+.nav-link.is-active {
+  font-weight: 700;
+  box-shadow: inset 0 -3px 0 var(--color-accent);
+  border-radius: 0;
+}
+.nav-link--accent {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+.nav-link--accent:hover {
+  background: var(--color-accent-hover);
+}
+.nav-user {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-muted);
+}
+.menu-toggle {
+  display: none;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.site-footer {
+  border-top: 1px solid var(--color-border);
+  padding: 1rem;
+  text-align: center;
+  color: var(--color-muted);
+}
+.site-footer p {
+  margin: 0;
+}
+
+@media (max-width: 40rem) {
+  .menu-toggle {
+    display: inline-block;
+  }
+  .site-nav {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .site-nav[data-open='true'] {
+    display: flex;
+  }
+}
