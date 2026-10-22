@@ -51,16 +51,16 @@ describe('validateDraft', () => {
 
   it('checks image urls', () => {
     const d = valid();
-    d.items[0].imageUrl = 'ftp://x/y.png';
-    d.items[1].imageUrl = 'not a url';
-    d.items[2].imageUrl = 'https://cdn.example.com/' + 'a'.repeat(LIMITS.maxImageUrl);
+    d.items[0]!.imageUrl = 'ftp://x/y.png';
+    d.items[1]!.imageUrl = 'not a url';
+    d.items[2]!.imageUrl = 'https://cdn.example.com/' + 'a'.repeat(LIMITS.maxImageUrl);
     const e = validateDraft(d);
     expect(e['items.0.image_url']).toBeTruthy();
     expect(e['items.1.image_url']).toBeTruthy();
     expect(e['items.2.image_url']).toContain('2048');
-    d.items[0].imageUrl = 'https://cdn.example.com/a.png';
-    d.items[1].imageUrl = '';
-    d.items[2].imageUrl = '   ';
+    d.items[0]!.imageUrl = 'https://cdn.example.com/a.png';
+    d.items[1]!.imageUrl = '';
+    d.items[2]!.imageUrl = '   ';
     expect(validateDraft(d)).toEqual({});
   });
 
