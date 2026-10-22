@@ -35,5 +35,18 @@ services:
       - "8025:8025"
       - "1025:1025"
 
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: tierl
+      MINIO_ROOT_PASSWORD: tierl-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
 volumes:
   pgdata:
+  miniodata:
