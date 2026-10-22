@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,8 +18,10 @@ const (
 
 // Config holds all runtime settings of the service.
 type Config struct {
-	HTTPAddr        string
-	DatabaseURL     string
+	HTTPAddr    string
+	DatabaseURL string
+	// MigrateOnStart applies pending migrations at startup (TIERL_MIGRATE_ON_START, default false).
+	MigrateOnStart  bool
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
@@ -29,6 +32,14 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPAddr:        valueOr(getenv("TIERL_HTTP_ADDR"), defaultHTTPAddr),
 		DatabaseURL:     getenv("TIERL_DATABASE_URL"),
 		ShutdownTimeout: defaultShutdownTimeout,
+	}
+
+	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_MIGRATE_ON_START: %w", err)
+		}
+		cfg.MigrateOnStart = b
 	}
 
 	var level slog.Level

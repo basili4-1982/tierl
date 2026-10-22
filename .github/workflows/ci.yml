@@ -26,6 +26,9 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: test
+        env:
+          # Postgres integration tests (testcontainers) must run in CI, not skip.
+          TIERL_REQUIRE_DOCKER: "1"
         run: make cover
 
   web:

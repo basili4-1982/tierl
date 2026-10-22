@@ -1,4 +1,4 @@
-.PHONY: web-install web-build web-test fmt lint vet test cover build run up down
+.PHONY: migrate-up migrate-down web-install web-build web-test fmt lint vet test cover build run up down
 
 COVER_MIN ?= 80
 
@@ -23,6 +23,15 @@ build:
 
 run:
 	go run ./cmd/tierl
+
+# Local database from docker-compose.yml; override DATABASE_URL for another one.
+DATABASE_URL ?= postgres://tierl:tierl@localhost:5432/tierl?sslmode=disable
+
+migrate-up:
+	TIERL_DATABASE_URL='$(DATABASE_URL)' go run ./cmd/migrate up
+
+migrate-down:
+	TIERL_DATABASE_URL='$(DATABASE_URL)' go run ./cmd/migrate down
 
 up:
 	docker compose up --build
