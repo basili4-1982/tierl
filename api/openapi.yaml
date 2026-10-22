@@ -1,0 +1,1073 @@
+openapi: 3.1.0
+info:
+  title: Tierl API
+  version: 0.1.0
+  summary: Контракт API сервиса тир-листов (опросы-ранжирования).
+  description: |
+    Контракт, на котором бэкенд и фронт работают параллельно.
+
+    ## Сессии и CSRF
+    * Авторизация: серверная сессия, токен лежит в cookie `tierl_session`
+      (HttpOnly, Secure, SameSite=Lax).
+    * Анонимный участник получает cookie `tierl_anon` (HttpOnly, Secure,
+      SameSite=Lax) при первом ответе; по ней определяется "один ответ на
+      сессию" и возможность перепройти опрос.
+    * Все небезопасные методы (POST, PUT, PATCH, DELETE) требуют заголовок
+      `X-CSRF-Token`. Токен выдаёт `GET /csrf` (и он же возвращается в `GET /auth/me`).
+      Без заголовка или с неверным токеном - `403 csrf_failed`.
+
+    ## Ошибки
+    Любой ответ 4xx/5xx имеет тело `Error`: `code` (машинный, стабильный),
+    `message` (для человека), `details` (необязательный объект, например
+    ошибки по полям).
+
+    ## Пагинация
+    Курсорная: `?limit=20&cursor=<opaque>`. Ответ содержит `items` и
+    `next_cursor` (null, если страниц больше нет). Курсор непрозрачен и
+    привязан к параметрам сортировки и поиска.
+
+    ## Видимость
+    `public` - опрос виден в каталоге и индексируется. `unlisted` - доступен
+    только по ссылке с непредсказуемым slug, не попадает в каталог и sitemap.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Локальная разработка
+  - url: /api/v1
+    description: Относительно хоста, с которого отдан фронт
+tags:
+  - { name: auth, description: "Регистрация, вход, сессии, восстановление пароля." }
+  - { name: tierlists, description: "Создание и управление опросами." }
+  - { name: submissions, description: "Ответы участников, в том числе анонимные." }
+  - { name: results, description: "Результат и статистика." }
+  - { name: catalog, description: "Публичный каталог." }
+  - { name: me, description: "Личный кабинет." }
+security:
+  - sessionCookie: []
+    csrfHeader: []
+paths:
+  /csrf:
+    get:
+      tags: [auth]
+      operationId: getCsrfToken
+      summary: Получить CSRF-токен
+      security: []
+      responses:
+        '200':
+          description: Токен для заголовка `X-CSRF-Token`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CsrfToken' }
+              example: { csrf_token: 'c3Jm...Zg' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Регистрация
+      description: Создаёт пользователя и отправляет письмо с ссылкой подтверждения email.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+            example: { email: anna@example.com, password: correct-horse-battery, display_name: Anna }
+      responses:
+        '201':
+          description: Пользователь создан, сессия открыта (email не подтверждён).
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetSessionCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+              example:
+                id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11
+                email: anna@example.com
+                display_name: Anna
+                email_verified: false
+                created_at: '2026-10-22T09:00:00Z'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Email уже занят.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: email_taken, message: Этот email уже зарегистрирован }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      operationId: verifyEmail
+      summary: Подтверждение email по токену из письма
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRequest' }
+            example: { token: 3q2-7wEAAA }
+      responses:
+        '204': { description: Email подтверждён. }
+        '400':
+          description: Токен недействителен, просрочен или уже использован.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: invalid_token, message: Ссылка недействительна или устарела }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Вход
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { email: anna@example.com, password: correct-horse-battery }
+      responses:
+        '200':
+          description: Сессия открыта.
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetSessionCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+              example:
+                id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11
+                email: anna@example.com
+                display_name: Anna
+                email_verified: true
+                created_at: '2026-10-22T09:00:00Z'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401':
+          description: Неверный email или пароль (ответ одинаков для обоих случаев).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: invalid_credentials, message: Неверный email или пароль }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Выход из текущей сессии
+      responses:
+        '204':
+          description: Сессия закрыта, cookie очищена.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/logout-all:
+    post:
+      tags: [auth]
+      operationId: logoutAll
+      summary: Выход со всех устройств
+      responses:
+        '204':
+          description: Все сессии пользователя закрыты.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/forgot-password:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      summary: Запрос сброса пароля
+      description: Ответ всегда одинаков, независимо от того, существует ли email.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+            example: { email: anna@example.com }
+      responses:
+        '202': { description: "Если адрес зарегистрирован, письмо отправлено." }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/reset-password:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      summary: Установка нового пароля по токену
+      description: После смены пароля все сессии пользователя сбрасываются.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+            example: { token: 3q2-7wEAAA, new_password: another-long-password }
+      responses:
+        '204': { description: Пароль изменён. }
+        '400':
+          description: Токен недействителен, просрочен или использован.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: invalid_token, message: Ссылка недействительна или устарела }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: Текущий пользователь
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Профиль.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+              example:
+                id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11
+                email: anna@example.com
+                display_name: Anna
+                email_verified: true
+                created_at: '2026-10-22T09:00:00Z'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /tierlists:
+    post:
+      tags: [tierlists]
+      operationId: createTierlist
+      summary: Создать опрос
+      description: Только для пользователя с подтверждённым email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TierlistInput' }
+            example:
+              title: Лучшие языки программирования
+              description: Расставьте по тирам
+              visibility: unlisted
+              tiers:
+                - { name: S, color: '#ff7f7f' }
+                - { name: A, color: '#ffbf7f' }
+                - { name: B, color: '#ffdf7f' }
+              items:
+                - { label: Go }
+                - { label: Rust, image_url: 'https://cdn.example.com/img/rust.png' }
+      responses:
+        '201':
+          description: Опрос создан.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tierlist' }
+              examples:
+                default: { $ref: '#/components/examples/TierlistExample' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: CSRF не пройден или email не подтверждён.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: email_not_verified, message: 'Подтвердите email, чтобы создавать опросы' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /tierlists/{slug}:
+    parameters:
+      - $ref: '#/components/parameters/Slug'
+    get:
+      tags: [tierlists]
+      operationId: getTierlist
+      summary: Опрос по slug
+      description: |
+        Доступно без авторизации для открытых и закрытых опросов (unlisted -
+        по знанию slug). Для автора в ответе есть `is_owner` и `submissions_count`.
+      security:
+        - {}
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Опрос.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tierlist' }
+              examples:
+                default: { $ref: '#/components/examples/TierlistExample' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [tierlists]
+      operationId: updateTierlist
+      summary: Изменить опрос (автор)
+      description: Правка тиров и элементов запрещена после первого ответа (`409 tierlist_locked`); название, описание и видимость менять можно всегда.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TierlistPatch' }
+            example: { title: Новое название, visibility: public }
+      responses:
+        '200':
+          description: Обновлённый опрос.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tierlist' }
+              examples:
+                default: { $ref: '#/components/examples/TierlistExample' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Тиры или элементы нельзя менять - уже есть ответы.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: tierlist_locked, message: 'Опрос уже проходили, структуру менять нельзя' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    delete:
+      tags: [tierlists]
+      operationId: deleteTierlist
+      summary: Удалить опрос (автор)
+      responses:
+        '204': { description: Опрос и все ответы удалены. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tierlists/{slug}/close:
+    parameters:
+      - $ref: '#/components/parameters/Slug'
+    post:
+      tags: [tierlists]
+      operationId: closeTierlist
+      summary: Закрыть опрос для новых ответов (автор)
+      responses:
+        '200':
+          description: Опрос закрыт (операция идемпотентна).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tierlist' }
+              examples:
+                default: { $ref: '#/components/examples/TierlistExample' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tierlists/{slug}/submissions:
+    parameters:
+      - $ref: '#/components/parameters/Slug'
+    post:
+      tags: [submissions]
+      operationId: createSubmission
+      summary: Анонимный ответ на опрос
+      description: |
+        Регистрация не нужна. Если cookie `tierl_anon` нет, она выдаётся в ответе.
+        Один ответ на сессию: повторный POST даёт `409 already_submitted`
+        (в `details.result_id` - существующий результат); чтобы перепройти,
+        используйте `PUT /tierlists/{slug}/submissions/mine`.
+        Нужны ответы по всем элементам опроса.
+      security:
+        - anonSession: []
+          csrfHeader: []
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmissionInput' }
+            example:
+              placements:
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, tier_id: 7a1c2d3e-0000-4000-8000-000000000003 }
+      responses:
+        '201':
+          description: Ответ принят.
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetAnonCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+              examples:
+                default: { $ref: '#/components/examples/SubmissionExample' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Ответ уже есть или опрос закрыт.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                already:
+                  value:
+                    code: already_submitted
+                    message: Вы уже отвечали на этот опрос
+                    details: { result_id: 9c4e1f2a-3b5d-4e6f-8a7b-1c2d3e4f5a6b }
+                closed:
+                  value: { code: tierlist_closed, message: Опрос закрыт }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /tierlists/{slug}/submissions/mine:
+    parameters:
+      - $ref: '#/components/parameters/Slug'
+    put:
+      tags: [submissions]
+      operationId: replaceMySubmission
+      summary: Перепройти опрос
+      description: Заменяет ответ текущей анонимной (или авторизованной) сессии; идентификатор результата сохраняется.
+      security:
+        - anonSession: []
+          csrfHeader: []
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmissionInput' }
+            example:
+              placements:
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000002 }
+                - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+      responses:
+        '200':
+          description: Ответ заменён.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+              examples:
+                default: { $ref: '#/components/examples/SubmissionExample' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Опрос закрыт.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: tierlist_closed, message: Опрос закрыт }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    get:
+      tags: [submissions]
+      operationId: getMySubmission
+      summary: Мой ответ в этом опросе (по cookie)
+      security:
+        - anonSession: []
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Ответ текущей сессии.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+              examples:
+                default: { $ref: '#/components/examples/SubmissionExample' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /results/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResultId'
+    get:
+      tags: [results]
+      operationId: getResult
+      summary: Результат по id
+      description: Id - непредсказуемый UUID, ссылкой можно делиться. Возвращает ответ участника вместе с опросом.
+      security:
+        - {}
+      responses:
+        '200':
+          description: Результат.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Result' }
+              examples:
+                default: { $ref: '#/components/examples/ResultExample' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /results/{id}/stats:
+    parameters:
+      - $ref: '#/components/parameters/ResultId'
+    get:
+      tags: [results]
+      operationId: getResultStats
+      summary: Статистика результата
+      description: |
+        Процент участников, "думающих как ты" (сходство >= порога), распределение
+        по тирам для каждого элемента, самые похожие и непохожие ответы.
+        При числе ответов меньше минимума `insufficient_data = true`, а
+        `like_you_percent`, `similar` и `dissimilar` пусты/null.
+      security:
+        - {}
+      responses:
+        '200':
+          description: Статистика.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResultStats' }
+              example:
+                total_submissions: 42
+                insufficient_data: false
+                min_submissions: 10
+                like_you_percent: 37.5
+                similarity_threshold: 0.8
+                items:
+                  - item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01
+                    label: Go
+                    distribution:
+                      - { tier_id: 7a1c2d3e-0000-4000-8000-000000000001, count: 20, percent: 47.6 }
+                      - { tier_id: 7a1c2d3e-0000-4000-8000-000000000002, count: 22, percent: 52.4 }
+                similar:
+                  - { result_id: 11111111-2222-4333-8444-555555555555, similarity: 0.97 }
+                dissimilar:
+                  - { result_id: 66666666-7777-4888-8999-aaaaaaaaaaaa, similarity: 0.12 }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /catalog:
+    get:
+      tags: [catalog]
+      operationId: listCatalog
+      summary: Публичный каталог опросов
+      description: Только `public` и не закрытые удалением опросы. Unlisted сюда не попадает.
+      security:
+        - {}
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: sort
+          in: query
+          schema: { type: string, enum: [new, popular], default: new }
+          description: new - по дате создания, popular - по числу ответов.
+        - name: q
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Поиск по названию и описанию.
+      responses:
+        '200':
+          description: Страница каталога.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TierlistPage' }
+              examples:
+                default: { $ref: '#/components/examples/CatalogPageExample' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/tierlists:
+    get:
+      tags: [me]
+      operationId: listMyTierlists
+      summary: Мои опросы
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Опросы автора (включая unlisted и закрытые).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TierlistPage' }
+              examples:
+                default: { $ref: '#/components/examples/MyTierlistsExample' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/submissions:
+    get:
+      tags: [me]
+      operationId: listMySubmissions
+      summary: Мои ответы
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Ответы пользователя.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmissionPage' }
+              examples:
+                default: { $ref: '#/components/examples/MySubmissionsExample' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/submissions/claim:
+    post:
+      tags: [me]
+      operationId: claimAnonymousSubmissions
+      summary: Привязать анонимные ответы к аккаунту
+      description: Привязывает ответы, сделанные с текущей cookie `tierl_anon`, к вошедшему пользователю.
+      security:
+        - sessionCookie: []
+          anonSession: []
+          csrfHeader: []
+      responses:
+        '200':
+          description: Сколько ответов привязано.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [claimed]
+                properties:
+                  claimed: { type: integer, minimum: 0 }
+              example: { claimed: 3 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: tierl_session
+      description: Серверная сессия пользователя (HttpOnly, Secure, SameSite=Lax).
+    anonSession:
+      type: apiKey
+      in: cookie
+      name: tierl_anon
+      description: Анонимная сессия участника (HttpOnly, Secure, SameSite=Lax).
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Токен из `GET /csrf`; обязателен для POST/PUT/PATCH/DELETE.
+  headers:
+    SetSessionCookie:
+      description: "`tierl_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/`"
+      schema: { type: string }
+    SetAnonCookie:
+      description: "`tierl_anon=<token>; HttpOnly; Secure; SameSite=Lax; Path=/` (если ещё не выдана)"
+      schema: { type: string }
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      description: Для public - читаемый, для unlisted - криптостойкий токен не короче 12 символов.
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{3,64}$' }
+    ResultId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Непрозрачный курсор из `next_cursor` предыдущей страницы.
+      schema: { type: string, maxLength: 512 }
+  responses:
+    BadRequest:
+      description: Некорректный запрос (синтаксис, типы, неверный курсор).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: bad_request, message: Некорректное тело запроса }
+    Unauthorized:
+      description: Нет действующей сессии.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: unauthorized, message: Требуется вход }
+    Forbidden:
+      description: CSRF-токен отсутствует/неверен либо нет прав на объект.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: csrf_failed, message: Неверный CSRF-токен }
+    NotFound:
+      description: Объект не найден (или скрыт от этого пользователя).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: not_found, message: Не найдено }
+    ValidationFailed:
+      description: Данные не прошли бизнес-валидацию; `details.fields` - ошибки по полям.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: validation_failed
+            message: Проверьте поля формы
+            details:
+              fields:
+                password: Длина пароля от 10 до 128 символов
+    TooManyRequests:
+      description: Превышен лимит запросов.
+      headers:
+        Retry-After:
+          description: Через сколько секунд повторить.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: rate_limited, message: 'Слишком много запросов', details: { retry_after: 30 } }
+  examples:
+    TierlistExample:
+      value:
+        id: 3f2c8a1e-0000-4000-8000-00000000aaaa
+        slug: xK3pQ9vTz2Lm
+        title: Лучшие языки программирования
+        description: Расставьте по тирам
+        visibility: unlisted
+        status: open
+        tiers:
+          - { id: 7a1c2d3e-0000-4000-8000-000000000001, name: S, color: '#ff7f7f', position: 0 }
+          - { id: 7a1c2d3e-0000-4000-8000-000000000002, name: A, color: '#ffbf7f', position: 1 }
+          - { id: 7a1c2d3e-0000-4000-8000-000000000003, name: B, color: '#ffdf7f', position: 2 }
+        items:
+          - { id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, label: Go, image_url: null, position: 0 }
+          - { id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, label: Rust, image_url: 'https://cdn.example.com/img/rust.png', position: 1 }
+        author: { id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11, display_name: Anna }
+        is_owner: false
+        submissions_count: 42
+        created_at: '2026-10-22T09:00:00Z'
+        closed_at: null
+    ResultExample:
+      value:
+        submission:
+          id: 9c4e1f2a-3b5d-4e6f-8a7b-1c2d3e4f5a6b
+          tierlist_slug: xK3pQ9vTz2Lm
+          placements:
+            - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+          created_at: '2026-10-22T09:30:00Z'
+          updated_at: '2026-10-22T09:30:00Z'
+        tierlist:
+          id: 3f2c8a1e-0000-4000-8000-00000000aaaa
+          slug: xK3pQ9vTz2Lm
+          title: Лучшие языки программирования
+          description: Расставьте по тирам
+          visibility: unlisted
+          status: open
+          tiers:
+            - { id: 7a1c2d3e-0000-4000-8000-000000000001, name: S, color: '#ff7f7f', position: 0 }
+          items:
+            - { id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, label: Go, image_url: null, position: 0 }
+          author: { id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11, display_name: Anna }
+          is_owner: false
+          submissions_count: 42
+          created_at: '2026-10-22T09:00:00Z'
+          closed_at: null
+    CatalogPageExample:
+      value:
+        items:
+          - id: 3f2c8a1e-0000-4000-8000-00000000aaaa
+            slug: best-languages
+            title: Лучшие языки программирования
+            description: Расставьте по тирам
+            visibility: public
+            status: open
+            items_count: 12
+            submissions_count: 42
+            cover_url: null
+            author: { id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11, display_name: Anna }
+            created_at: '2026-10-22T09:00:00Z'
+        next_cursor: eyJ0IjoiMjAyNi0xMC0yMiJ9
+    MyTierlistsExample:
+      value:
+        items:
+          - id: 3f2c8a1e-0000-4000-8000-00000000aaaa
+            slug: xK3pQ9vTz2Lm
+            title: Лучшие языки программирования
+            description: Расставьте по тирам
+            visibility: unlisted
+            status: open
+            items_count: 12
+            submissions_count: 42
+            cover_url: null
+            author: { id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11, display_name: Anna }
+            created_at: '2026-10-22T09:00:00Z'
+        next_cursor: null
+    MySubmissionsExample:
+      value:
+        items:
+          - id: 9c4e1f2a-3b5d-4e6f-8a7b-1c2d3e4f5a6b
+            tierlist_slug: xK3pQ9vTz2Lm
+            placements:
+              - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+            created_at: '2026-10-22T09:30:00Z'
+            updated_at: '2026-10-22T09:30:00Z'
+        next_cursor: null
+    SubmissionExample:
+      value:
+        id: 9c4e1f2a-3b5d-4e6f-8a7b-1c2d3e4f5a6b
+        tierlist_slug: xK3pQ9vTz2Lm
+        placements:
+          - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a01, tier_id: 7a1c2d3e-0000-4000-8000-000000000001 }
+          - { item_id: 5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02, tier_id: 7a1c2d3e-0000-4000-8000-000000000003 }
+        created_at: '2026-10-22T09:30:00Z'
+        updated_at: '2026-10-22T09:30:00Z'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Машинный стабильный код (snake_case).
+          examples: [validation_failed]
+        message:
+          type: string
+          description: Текст для человека.
+        details:
+          type: object
+          additionalProperties: true
+          description: Дополнительные данные, например `fields` для ошибок валидации.
+    CsrfToken:
+      type: object
+      required: [csrf_token]
+      properties:
+        csrf_token: { type: string }
+    User:
+      type: object
+      required: [id, email, display_name, email_verified, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string, minLength: 1, maxLength: 50 }
+        email_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+    RegisterRequest:
+      type: object
+      required: [email, password, display_name]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 10, maxLength: 128 }
+        display_name: { type: string, minLength: 1, maxLength: 50 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1, maxLength: 128 }
+    TokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 256 }
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    ResetPasswordRequest:
+      type: object
+      required: [token, new_password]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 256 }
+        new_password: { type: string, minLength: 10, maxLength: 128 }
+    Visibility:
+      type: string
+      enum: [public, unlisted]
+    TierlistStatus:
+      type: string
+      enum: [open, closed]
+    TierInput:
+      type: object
+      required: [name, color]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 30 }
+        color: { type: string, pattern: '^#[0-9a-fA-F]{6}$', description: HEX-цвет тира. }
+    ItemInput:
+      type: object
+      required: [label]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 100 }
+        image_url:
+          type: [string, 'null']
+          format: uri
+          maxLength: 2048
+    Tier:
+      allOf:
+        - $ref: '#/components/schemas/TierInput'
+        - type: object
+          required: [id, position]
+          properties:
+            id: { type: string, format: uuid }
+            position: { type: integer, minimum: 0, description: 0 - высший тир. }
+    Item:
+      allOf:
+        - $ref: '#/components/schemas/ItemInput'
+        - type: object
+          required: [id, position]
+          properties:
+            id: { type: string, format: uuid }
+            position: { type: integer, minimum: 0 }
+    AuthorRef:
+      type: object
+      required: [id, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+    TierlistInput:
+      type: object
+      required: [title, visibility, tiers, items]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000, default: '' }
+        visibility: { $ref: '#/components/schemas/Visibility' }
+        tiers:
+          type: array
+          minItems: 2
+          maxItems: 10
+          items: { $ref: '#/components/schemas/TierInput' }
+        items:
+          type: array
+          minItems: 2
+          maxItems: 100
+          items: { $ref: '#/components/schemas/ItemInput' }
+    TierlistPatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { $ref: '#/components/schemas/Visibility' }
+        tiers:
+          type: array
+          minItems: 2
+          maxItems: 10
+          items: { $ref: '#/components/schemas/TierInput' }
+        items:
+          type: array
+          minItems: 2
+          maxItems: 100
+          items: { $ref: '#/components/schemas/ItemInput' }
+    Tierlist:
+      type: object
+      required: [id, slug, title, description, visibility, status, tiers, items, author, is_owner, submissions_count, created_at, closed_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        description: { type: string }
+        visibility: { $ref: '#/components/schemas/Visibility' }
+        status: { $ref: '#/components/schemas/TierlistStatus' }
+        tiers:
+          type: array
+          items: { $ref: '#/components/schemas/Tier' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Item' }
+        author: { $ref: '#/components/schemas/AuthorRef' }
+        is_owner: { type: boolean }
+        submissions_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        closed_at: { type: [string, 'null'], format: date-time }
+    TierlistSummary:
+      type: object
+      required: [id, slug, title, description, visibility, status, items_count, submissions_count, author, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        description: { type: string }
+        visibility: { $ref: '#/components/schemas/Visibility' }
+        status: { $ref: '#/components/schemas/TierlistStatus' }
+        items_count: { type: integer, minimum: 0 }
+        submissions_count: { type: integer, minimum: 0 }
+        cover_url: { type: [string, 'null'], format: uri }
+        author: { $ref: '#/components/schemas/AuthorRef' }
+        created_at: { type: string, format: date-time }
+    TierlistPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TierlistSummary' }
+        next_cursor: { type: [string, 'null'] }
+    Placement:
+      type: object
+      required: [item_id, tier_id]
+      properties:
+        item_id: { type: string, format: uuid }
+        tier_id: { type: string, format: uuid }
+    SubmissionInput:
+      type: object
+      required: [placements]
+      properties:
+        placements:
+          type: array
+          description: По одному размещению на каждый элемент опроса.
+          minItems: 1
+          items: { $ref: '#/components/schemas/Placement' }
+    Submission:
+      type: object
+      required: [id, tierlist_slug, placements, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid, description: "Он же id результата (/results/{id})." }
+        tierlist_slug: { type: string }
+        placements:
+          type: array
+          items: { $ref: '#/components/schemas/Placement' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SubmissionPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Submission' }
+        next_cursor: { type: [string, 'null'] }
+    Result:
+      type: object
+      required: [submission, tierlist]
+      properties:
+        submission: { $ref: '#/components/schemas/Submission' }
+        tierlist: { $ref: '#/components/schemas/Tierlist' }
+    TierCount:
+      type: object
+      required: [tier_id, count, percent]
+      properties:
+        tier_id: { type: string, format: uuid }
+        count: { type: integer, minimum: 0 }
+        percent: { type: number, minimum: 0, maximum: 100 }
+    ItemDistribution:
+      type: object
+      required: [item_id, label, distribution]
+      properties:
+        item_id: { type: string, format: uuid }
+        label: { type: string }
+        distribution:
+          type: array
+          items: { $ref: '#/components/schemas/TierCount' }
+    SimilarResult:
+      type: object
+      required: [result_id, similarity]
+      properties:
+        result_id: { type: string, format: uuid }
+        similarity: { type: number, minimum: 0, maximum: 1, description: "1 - sum|ta-tb| / (N*(T-1)) по пересечению элементов." }
+    ResultStats:
+      type: object
+      required: [total_submissions, insufficient_data, min_submissions, like_you_percent, similarity_threshold, items, similar, dissimilar]
+      properties:
+        total_submissions: { type: integer, minimum: 0 }
+        insufficient_data: { type: boolean }
+        min_submissions: { type: integer, minimum: 1 }
+        like_you_percent:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 100
+          description: Null при `insufficient_data`.
+        similarity_threshold: { type: number, minimum: 0, maximum: 1 }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ItemDistribution' }
+        similar:
+          type: array
+          maxItems: 5
+          items: { $ref: '#/components/schemas/SimilarResult' }
+        dissimilar:
+          type: array
+          maxItems: 5
+          items: { $ref: '#/components/schemas/SimilarResult' }
