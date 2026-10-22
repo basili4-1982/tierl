@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import { takeTierlistHandlers } from '../features/take-tierlist/handlers';
 import type { components } from '../api/schema';
 import { authHandlers } from '../features/auth/mocks';
 
@@ -8,4 +9,5 @@ type CsrfToken = components['schemas']['CsrfToken'];
 export const handlers = [
   http.get('/api/v1/csrf', () => HttpResponse.json<CsrfToken>({ csrf_token: 'test-csrf-token' })),
   ...authHandlers,
+  ...takeTierlistHandlers,
 ];

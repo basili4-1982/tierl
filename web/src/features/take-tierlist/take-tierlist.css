@@ -1,0 +1,124 @@
+.take {
+  max-width: 64rem;
+}
+.take-note {
+  padding: 0.5rem 0.75rem;
+  background: #eef4ff;
+  border-radius: 0.5rem;
+}
+.take-board {
+  display: grid;
+  gap: 0.5rem;
+}
+.take-zone {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  border: 1px solid #c8c8d0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.take-zone.is-over {
+  outline: 3px solid #3b6fe0;
+}
+.take-zone__title {
+  margin: 0;
+  padding: 0.5rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.take-zone--pool .take-zone__title {
+  background: #eee;
+  color: #222;
+}
+.take-zone__items {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-height: 3.5rem;
+  align-content: flex-start;
+}
+.take-zone__empty {
+  color: #666;
+  font-size: 0.875rem;
+  align-self: center;
+}
+.take-chip {
+  position: relative;
+  background: #fff;
+  border: 1px solid #888;
+  border-radius: 0.4rem;
+}
+.take-chip.is-dragging {
+  opacity: 0.4;
+}
+.take-chip--overlay {
+  padding: 0.5rem 0.75rem;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
+}
+.take-chip__handle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  cursor: grab;
+  touch-action: manipulation;
+  user-select: none;
+}
+.take-chip__handle:focus-visible {
+  outline: 3px solid #3b6fe0;
+  outline-offset: 2px;
+}
+.take-chip__img {
+  width: 2rem;
+  height: 2rem;
+  object-fit: cover;
+  border-radius: 0.25rem;
+}
+/* Select-based move: a screen-reader and no-drag fallback, shown on focus. */
+.take-chip__move {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+.take-chip:focus-within .take-chip__move:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  opacity: 1;
+  margin: 0 0.5rem 0.5rem;
+}
+.take-actions {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  padding: 0.5rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.take-submit {
+  min-height: 2.75rem;
+  padding: 0 1.25rem;
+  font-size: 1rem;
+}
+@media (max-width: 40rem) {
+  .take-zone {
+    grid-template-columns: 1fr;
+  }
+  .take-zone__title {
+    justify-content: flex-start;
+    padding: 0.35rem 0.75rem;
+  }
+}
