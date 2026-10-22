@@ -1,19 +1,15 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { MemoryRouter } from 'react-router-dom';
 import { AppRoutes } from '../../routes';
+import { renderApp } from '../auth/test-utils';
 import { server } from '../../mocks/server';
 import { resetTierlistStore } from './mocks';
 
 beforeEach(() => resetTierlistStore());
 
 function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
-    </MemoryRouter>,
-  );
+  return renderApp(<AppRoutes />, [path]);
 }
 
 async function fillValidNew(user: ReturnType<typeof userEvent.setup>) {

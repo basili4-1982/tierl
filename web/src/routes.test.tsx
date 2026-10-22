@@ -1,13 +1,9 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { screen } from '@testing-library/react';
+import { renderApp } from './features/auth/test-utils';
 import { AppRoutes } from './routes';
 
 function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
-    </MemoryRouter>,
-  );
+  return renderApp(<AppRoutes />, [path]);
 }
 
 describe('routes', () => {
