@@ -41,7 +41,7 @@ func minioEndpoint(t *testing.T) string {
 			}
 		}()
 		ctx := context.Background()
-		ctr, err := tcminio.Run(ctx, "cgr.dev/chainguard/minio:latest",
+		ctr, err := tcminio.Run(ctx, "cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880",
 			tcminio.WithUsername(minioUser), tcminio.WithPassword(minioPass))
 		if err != nil {
 			minioErr = err
