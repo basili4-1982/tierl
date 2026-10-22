@@ -3,3 +3,6 @@
 bin
 coverage.out
 web/node_modules
+web/node_modules
+web/coverage
+internal/web/static/dist/*

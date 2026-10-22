@@ -73,3 +73,15 @@ go test -race -cover ./...
 ## Безопасность
 
 Уязвимости не раскрываем в issues — см. `SECURITY.md`.
+
+## Фронтенд (`web/`)
+
+```bash
+make web-install   # npm ci
+make web-test      # lint + typecheck + vitest
+make web-build     # сборка в internal/web/static/dist (go:embed)
+cd web && npm run dev   # Vite на :5173, /api проксируется на :8080
+cd web && npm run gen:api   # типы из api/openapi.yaml -> web/src/api/schema.d.ts
+```
+
+Сгенерированный `schema.d.ts` коммитится; после изменения контракта перегенерируйте его. Содержимое `internal/web/static/dist` в git не попадает (кроме `.gitkeep`).

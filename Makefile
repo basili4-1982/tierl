@@ -1,4 +1,4 @@
-.PHONY: fmt lint vet test cover build run up down
+.PHONY: web-install web-build web-test fmt lint vet test cover build run up down
 
 COVER_MIN ?= 80
 
@@ -29,3 +29,12 @@ up:
 
 down:
 	docker compose down
+
+web-install:
+	cd web && npm ci
+
+web-build:
+	cd web && npm run build
+
+web-test:
+	cd web && npm run lint && npm run typecheck && npm test
