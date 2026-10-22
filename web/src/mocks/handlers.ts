@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { takeTierlistHandlers } from '../features/take-tierlist/handlers';
 import type { components } from '../api/schema';
 import { authHandlers } from '../features/auth/mocks';
+import { resultHandlers } from '../features/result/handlers';
 import { tierlistEditorHandlers } from '../features/tierlist-editor/mocks';
 
 type CsrfToken = components['schemas']['CsrfToken'];
@@ -13,4 +14,5 @@ export const handlers = [
   // Editor first: it answers for lists created in the session and passes the rest on.
   ...tierlistEditorHandlers,
   ...takeTierlistHandlers,
+  ...resultHandlers,
 ];
