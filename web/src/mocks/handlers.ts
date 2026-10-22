@@ -10,6 +10,7 @@ type CsrfToken = components['schemas']['CsrfToken'];
 export const handlers = [
   http.get('/api/v1/csrf', () => HttpResponse.json<CsrfToken>({ csrf_token: 'test-csrf-token' })),
   ...authHandlers,
-  ...takeTierlistHandlers,
+  // Editor first: it answers for lists created in the session and passes the rest on.
   ...tierlistEditorHandlers,
+  ...takeTierlistHandlers,
 ];

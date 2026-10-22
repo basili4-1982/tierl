@@ -79,7 +79,8 @@ export const tierlistEditorHandlers = [
   }),
   http.get('/api/v1/tierlists/:slug', ({ params }) => {
     const t = store.get(String(params.slug));
-    return t ? HttpResponse.json(t) : err(404, 'not_found', 'Не найдено');
+    // Unknown slugs fall through to the next handler (fixtures of other features).
+    return t ? HttpResponse.json(t) : undefined;
   }),
   http.patch('/api/v1/tierlists/:slug', async ({ params, request }) => {
     const t = store.get(String(params.slug));
