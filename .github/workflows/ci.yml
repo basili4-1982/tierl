@@ -22,7 +22,7 @@ jobs:
         run: go vet ./...
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.1
+          version: v2.15.0
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: test
