@@ -1,0 +1,30 @@
+main form {
+  display: grid;
+  gap: 1rem;
+  max-width: 24rem;
+}
+.field {
+  display: grid;
+  gap: 0.25rem;
+}
+.field input {
+  padding: 0.5rem;
+  font: inherit;
+}
+.field input[aria-invalid='true'] {
+  border-color: #b00020;
+}
+.error {
+  color: #b00020;
+}
+.hint {
+  color: #555;
+}
+form button {
+  padding: 0.5rem 1rem;
+  font: inherit;
+}
+:focus-visible {
+  outline: 3px solid #1a56db;
+  outline-offset: 2px;
+}
