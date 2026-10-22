@@ -30,6 +30,8 @@ linters:
         - name: error-naming
         - name: unused-parameter
   exclusions:
+    paths:
+      - web/node_modules
     rules:
       - path: _test\.go
         linters: [gosec, noctx]
