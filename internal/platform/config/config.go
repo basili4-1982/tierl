@@ -24,6 +24,10 @@ type Config struct {
 	MigrateOnStart  bool
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
+	// Argon2 cost parameters for password hashing (ADR-003).
+	Argon2MemoryKiB   uint32
+	Argon2Iterations  uint32
+	Argon2Parallelism uint8
 }
 
 // Load reads settings through getenv (os.Getenv in production) so tests need no real environment.
@@ -32,6 +36,30 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPAddr:        valueOr(getenv("TIERL_HTTP_ADDR"), defaultHTTPAddr),
 		DatabaseURL:     getenv("TIERL_DATABASE_URL"),
 		ShutdownTimeout: defaultShutdownTimeout,
+		// Keep in sync with auth.DefaultHashParams (config must not import auth).
+		Argon2MemoryKiB:   64 * 1024,
+		Argon2Iterations:  3,
+		Argon2Parallelism: 2,
+	}
+
+	for _, v := range []struct {
+		name string
+		bits int
+		set  func(uint64)
+	}{
+		{"TIERL_ARGON2_MEMORY_KIB", 32, func(n uint64) { cfg.Argon2MemoryKiB = uint32(n) }},  //nolint:gosec // ParseUint bitSize bounds n
+		{"TIERL_ARGON2_ITERATIONS", 32, func(n uint64) { cfg.Argon2Iterations = uint32(n) }}, //nolint:gosec // ParseUint bitSize bounds n
+		{"TIERL_ARGON2_PARALLELISM", 8, func(n uint64) { cfg.Argon2Parallelism = uint8(n) }}, //nolint:gosec // ParseUint bitSize bounds n
+	} {
+		raw := strings.TrimSpace(getenv(v.name))
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(raw, 10, v.bits)
+		if err != nil || n == 0 {
+			return Config{}, fmt.Errorf("%s: must be a positive integer that fits %d bits", v.name, v.bits)
+		}
+		v.set(n)
 	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {
