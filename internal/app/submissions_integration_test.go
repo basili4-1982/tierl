@@ -296,6 +296,41 @@ func TestSubmissionFlowOnRealDatabase(t *testing.T) {
 	}
 }
 
+func TestIncompleteAnswerOnRealDatabase(t *testing.T) {
+	h, _ := newTestDeps(t)
+	anna := newClient(t, h, "anna")
+	body := `{"title":"Four","description":"d","visibility":"public","slug":"four-list",
+		"tiers":[{"name":"S","color":"#ff0000"},{"name":"A","color":"#00ff00"}],
+		"items":[{"label":"Go"},{"label":"Rust"},{"label":"Zig"},{"label":"C"}]}`
+	rec := anna.do(http.MethodPost, "/api/v1/tierlists", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	created := decodeBody(t, rec)
+	items, tiers := idsOf(created, "items", "id"), idsOf(created, "tiers", "id")
+
+	// Three of four items: the fourth is skipped and does not take part in
+	// similarity.
+	guest := newClient(t, h, "")
+	answer := guest.do(http.MethodPost, "/api/v1/tierlists/four-list/submissions", placementBody(items[:3], tiers))
+	if answer.Code != http.StatusCreated {
+		t.Fatalf("incomplete answer: %d %s", answer.Code, answer.Body.String())
+	}
+	resultID := decodeBody(t, answer)["id"].(string)
+	if n := len(decodeBody(t, answer)["placements"].([]any)); n != 3 {
+		t.Errorf("placements = %d", n)
+	}
+	stats := decodeBody(t, newClient(t, h, "").do(http.MethodGet, "/api/v1/results/"+resultID+"/stats", ""))
+	rows := stats["items"].([]any)
+	if len(rows) != 4 {
+		t.Fatalf("items = %d", len(rows))
+	}
+	last := rows[3].(map[string]any)["distribution"].([]any)
+	if last[0].(map[string]any)["count"] != float64(0) {
+		t.Errorf("skipped item must have no placements: %v", last)
+	}
+}
+
 func TestSubmissionAccessRulesOnRealDatabase(t *testing.T) {
 	h, pool := newTestDeps(t)
 	anna := newClient(t, h, "anna")
