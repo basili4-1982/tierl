@@ -10,11 +10,13 @@ info:
     * Авторизация: серверная сессия, токен лежит в cookie `tierl_session`
       (HttpOnly, Secure, SameSite=Lax).
     * Анонимный участник получает cookie `tierl_anon` (HttpOnly, Secure,
-      SameSite=Lax) при первом ответе; по ней определяется "один ответ на
-      сессию" и возможность перепройти опрос.
+      SameSite=Lax, Max-Age 1 год) при первом ответе; по ней определяется
+      "один ответ на сессию" и возможность перепройти опрос. Cookie не
+      аутентифицирует: `/auth/me` и `/me/*` смотрят только на `tierl_session`.
     * Все небезопасные методы (POST, PUT, PATCH, DELETE) требуют заголовок
-      `X-CSRF-Token`. Токен выдаёт `GET /csrf` (и он же возвращается в `GET /auth/me`).
-      Без заголовка или с неверным токеном - `403 csrf_failed`.
+      `X-CSRF-Token`. Токен выдаёт `GET /csrf` (и он же возвращается в `GET /auth/me`);
+      он также кладётся в HttpOnly-cookie `tierl_csrf` для double-submit
+      проверки. Без заголовка или с неверным токеном - `403 csrf_failed`.
 
     ## Ошибки
     Любой ответ 4xx/5xx имеет тело `Error`: `code` (машинный, стабильный),
@@ -375,7 +377,12 @@ paths:
         Один ответ на сессию: повторный POST даёт `409 already_submitted`
         (в `details.result_id` - существующий результат); чтобы перепройти,
         используйте `PUT /tierlists/{slug}/submissions/mine`.
-        Нужны ответы по всем элементам опроса.
+        Ответ может быть неполным: элементы без размещения считаются
+        пропущенными и в сравнении не участвуют. Нужно не меньше 3
+        размещённых элементов, иначе `400 too_few_placements`. Каждый элемент
+        и тир должны принадлежать опросу. Отвечать можно только пока
+        `status = open`; закрытый опрос даёт `409 tierlist_closed`, а
+        draft/hidden не видны (`404`). Unlisted принимает ответы по ссылке.
       security:
         - anonSession: []
           csrfHeader: []
@@ -401,7 +408,15 @@ paths:
               schema: { $ref: '#/components/schemas/Submission' }
               examples:
                 default: { $ref: '#/components/examples/SubmissionExample' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+        '400':
+          description: Некорректный JSON или меньше 3 размещённых элементов.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                code: too_few_placements
+                message: Разместите не меньше 3 элементов
+                details: { min_placements: 3 }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -426,7 +441,11 @@ paths:
       tags: [submissions]
       operationId: replaceMySubmission
       summary: Перепройти опрос
-      description: Заменяет ответ текущей анонимной (или авторизованной) сессии; идентификатор результата сохраняется.
+      description: |
+        Upsert: заменяет ответ текущей анонимной сессии; идентификатор
+        результата сохраняется. Если ответа ещё нет, PUT создаёт его и тоже
+        выдаёт cookie `tierl_anon`. В отличие от POST, повторный PUT не даёт
+        `409 already_submitted`. Правила полноты и принадлежности те же.
       security:
         - anonSession: []
           csrfHeader: []
@@ -476,6 +495,24 @@ paths:
               examples:
                 default: { $ref: '#/components/examples/SubmissionExample' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /submissions/mine:
+    get:
+      tags: [submissions]
+      operationId: listMySubmissionsByAnon
+      summary: Все ответы текущей анонимной сессии
+      description: |
+        Только ответы, привязанные к cookie `tierl_anon`; авторизованная
+        сессия сюда не примешивается. Без cookie возвращается пустой список.
+      security:
+        - anonSession: []
+      responses:
+        '200':
+          description: Ответы анонимной сессии, новые изменения первыми.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmissionPage' }
+              examples:
+                default: { $ref: '#/components/examples/MySubmissionsExample' }
   /results/{id}:
     parameters:
       - $ref: '#/components/parameters/ResultId'
@@ -483,7 +520,11 @@ paths:
       tags: [results]
       operationId: getResult
       summary: Результат по id
-      description: Id - непредсказуемый UUID, ссылкой можно делиться. Возвращает ответ участника вместе с опросом.
+      description: |
+        Id - непредсказуемый UUID, ссылкой можно делиться. Возвращает ответ
+        участника вместе с опросом. Закрытый опрос остаётся доступен, а
+        draft/hidden результата не отдают (`404`). `is_owner` определяется
+        только авторизованной сессией, не cookie `tierl_anon`.
       security:
         - {}
       responses:
@@ -503,10 +544,15 @@ paths:
       operationId: getResultStats
       summary: Статистика результата
       description: |
-        Процент участников, "думающих как ты" (сходство >= порога), распределение
-        по тирам для каждого элемента, самые похожие и непохожие ответы.
-        При числе ответов меньше минимума `insufficient_data = true`, а
-        `like_you_percent`, `similar` и `dissimilar` пусты/null.
+        Процент участников, "думающих как ты" (сходство >= `similarity_threshold`),
+        распределение ответов по тирам для каждого элемента, до 5 самых похожих
+        и 5 самых непохожих ответов. Пары сравниваются только при пересечении
+        не меньше `min_overlap` (по умолчанию 3) элементов.
+        При числе ответов меньше `min_submissions` `insufficient_data = true`,
+        а `like_you_percent`, `similar` и `dissimilar` пусты/null.
+        Ответы в `similar`/`dissimilar` анонимны: идентификаторов, email и IP
+        нет, только степень сходства. `percent` в распределении считается от
+        числа ответов, разместивших этот элемент (пропуски не размывают долю).
       security:
         - {}
       responses:
@@ -518,7 +564,7 @@ paths:
               example:
                 total_submissions: 42
                 insufficient_data: false
-                min_submissions: 10
+                min_submissions: 20
                 like_you_percent: 37.5
                 similarity_threshold: 0.8
                 items:
@@ -528,9 +574,10 @@ paths:
                       - { tier_id: 7a1c2d3e-0000-4000-8000-000000000001, count: 20, percent: 47.6 }
                       - { tier_id: 7a1c2d3e-0000-4000-8000-000000000002, count: 22, percent: 52.4 }
                 similar:
-                  - { result_id: 11111111-2222-4333-8444-555555555555, similarity: 0.97 }
+                  - { similarity: 0.97 }
+                  - { similarity: 0.83 }
                 dissimilar:
-                  - { result_id: 66666666-7777-4888-8999-aaaaaaaaaaaa, similarity: 0.12 }
+                  - { similarity: 0.12 }
         '404': { $ref: '#/components/responses/NotFound' }
   /catalog:
     get:
@@ -585,6 +632,10 @@ paths:
       tags: [me]
       operationId: listMySubmissions
       summary: Мои ответы
+      description: |
+        Только авторизованная сессия `tierl_session`. Cookie `tierl_anon` не
+        даёт доступа: по ADR-002 ответы не привязываются к аккаунту, поэтому
+        без явного claim список остаётся пустым.
       security:
         - sessionCookie: []
       parameters:
@@ -1053,11 +1104,11 @@ components:
         distribution:
           type: array
           items: { $ref: '#/components/schemas/TierCount' }
-    SimilarResult:
+    SimilarAnswer:
       type: object
-      required: [result_id, similarity]
+      description: "Агрегат без идентификатора: только степень сходства с ответом участника."
+      required: [similarity]
       properties:
-        result_id: { type: string, format: uuid }
         similarity: { type: number, minimum: 0, maximum: 1, description: "1 - sum|ta-tb| / (N*(T-1)) по пересечению элементов." }
     ResultStats:
       type: object
@@ -1078,8 +1129,10 @@ components:
         similar:
           type: array
           maxItems: 5
-          items: { $ref: '#/components/schemas/SimilarResult' }
+          description: До 5 самых похожих ответов, без идентификаторов.
+          items: { $ref: '#/components/schemas/SimilarAnswer' }
         dissimilar:
           type: array
           maxItems: 5
-          items: { $ref: '#/components/schemas/SimilarResult' }
+          description: До 5 самых непохожих ответов, без идентификаторов.
+          items: { $ref: '#/components/schemas/SimilarAnswer' }

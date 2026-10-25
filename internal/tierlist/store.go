@@ -20,6 +20,9 @@ var (
 	ErrSlugTaken = errors.New("tierlist: slug already taken")
 	// ErrNotAcceptingSubmissions is returned when answers are sent to a tier list that is not open.
 	ErrNotAcceptingSubmissions = errors.New("tierlist: not accepting submissions")
+	// ErrAlreadySubmitted is returned when a session already has an answer and
+	// the caller asked to create a new one instead of replacing it.
+	ErrAlreadySubmitted = errors.New("tierlist: already submitted")
 )
 
 // Store persists tier lists with their items and tiers.
@@ -70,6 +73,18 @@ type SaveResult struct {
 	Replaced bool
 }
 
+// StoredSubmission is an answer loaded from the store. SessionID is the hash
+// of the anonymous session token and never leaves the server.
+type StoredSubmission struct {
+	ID           string
+	TierlistID   string
+	TierlistSlug string
+	SessionID    string
+	Placements   []Placement
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // ItemDistribution is the number of answers per tier for one item.
 type ItemDistribution struct {
 	ItemID string
@@ -79,6 +94,13 @@ type ItemDistribution struct {
 
 // Answers persists anonymous answers and their aggregates.
 type Answers interface {
+	// CreateAnswer stores the first answer of a session. It returns
+	// ErrAlreadySubmitted when the session already answered, and updates the
+	// per-tier counters in the same transaction otherwise. It also returns
+	// ErrNotFound, ErrNotAcceptingSubmissions, or domain.ErrInvalid for
+	// unknown items or tiers and duplicate items. (The name avoids clashing
+	// with Store.Create, which creates a tier list.)
+	CreateAnswer(ctx context.Context, s Submission, now time.Time) (SaveResult, error)
 	// Save stores the answer of a session, replacing the earlier one, and
 	// updates the per-tier counters in the same transaction. It returns
 	// ErrNotFound, ErrNotAcceptingSubmissions, or domain.ErrInvalid for
@@ -90,6 +112,14 @@ type Answers interface {
 	// Distributions returns the per-item tier counts from the pre-aggregate,
 	// ordered by item position.
 	Distributions(ctx context.Context, tierlistID string) ([]ItemDistribution, error)
+	// GetSubmissionByID returns one answer by its ID or ErrNotFound.
+	GetSubmissionByID(ctx context.Context, id string) (*StoredSubmission, error)
+	// GetSubmissionBySession returns the answer of a session in a tier list or
+	// ErrNotFound.
+	GetSubmissionBySession(ctx context.Context, tierlistID, sessionID string) (*StoredSubmission, error)
+	// ListSubmissionsBySession returns all answers of a session, newest change
+	// first.
+	ListSubmissionsBySession(ctx context.Context, sessionID string) ([]StoredSubmission, error)
 }
 
 // StoredAnswer is an answer with its ID, ready for the similarity package.

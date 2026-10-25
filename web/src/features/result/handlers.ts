@@ -33,11 +33,8 @@ export const sampleStats: ResultStats = {
       })),
     };
   }),
-  similar: [
-    { result_id: '11111111-2222-4333-8444-555555555555', similarity: 0.97 },
-    { result_id: '11111111-2222-4333-8444-555555555556', similarity: 0.92 },
-  ],
-  dissimilar: [{ result_id: '66666666-7777-4888-8999-aaaaaaaaaaaa', similarity: 0.12 }],
+  similar: [{ similarity: 0.97 }, { similarity: 0.92 }],
+  dissimilar: [{ similarity: 0.12 }],
 };
 
 export const fewDataResultId = '00000000-0000-4000-8000-000000000999';

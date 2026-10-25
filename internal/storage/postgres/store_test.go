@@ -309,6 +309,86 @@ func TestConcurrentSaveSameSession(t *testing.T) {
 	}
 }
 
+func TestSubmissionLookups(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+	if err := s.Create(ctx, mk("a", "alpha-list", domain.VisibilityPublic, domain.StatusOpen, t0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAnswer(ctx, tierlist.Submission{ID: "s1", TierlistID: "a", SessionID: "sess1",
+		Placements: place("i0", "tS", "i1", "tA", "i2", "tB")}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAnswer(ctx, tierlist.Submission{ID: "s2", TierlistID: "a", SessionID: "sess2",
+		Placements: place("i0", "tB", "i1", "tB", "i3", "tA")}, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAnswer(ctx, tierlist.Submission{ID: "s3", TierlistID: "a", SessionID: "sess1",
+		Placements: place("i0", "tS", "i1", "tS", "i2", "tS")}, t0); !errors.Is(err, tierlist.ErrAlreadySubmitted) {
+		t.Fatalf("duplicate create: %v", err)
+	}
+
+	byID, err := s.GetSubmissionByID(ctx, "s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byID.TierlistID != "a" || byID.TierlistSlug != "alpha-list" || len(byID.Placements) != 3 ||
+		!byID.CreatedAt.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("by id: %+v", byID)
+	}
+
+	bySession, err := s.GetSubmissionBySession(ctx, "a", "sess1")
+	if err != nil || bySession.ID != "s1" || bySession.TierlistSlug != "alpha-list" {
+		t.Fatalf("by session: %v %+v", err, bySession)
+	}
+	if _, err := s.GetSubmissionBySession(ctx, "a", "nobody"); !errors.Is(err, tierlist.ErrNotFound) {
+		t.Fatalf("unknown session: %v", err)
+	}
+	if _, err := s.GetSubmissionByID(ctx, "nope"); !errors.Is(err, tierlist.ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
+	}
+
+	list, err := s.ListSubmissionsBySession(ctx, "sess1")
+	if err != nil || len(list) != 1 || list[0].ID != "s1" {
+		t.Fatalf("list: %v %+v", err, list)
+	}
+	if empty, err := s.ListSubmissionsBySession(ctx, "nobody"); err != nil || len(empty) != 0 {
+		t.Fatalf("empty list: %v %+v", err, empty)
+	}
+}
+
+func TestConcurrentCreateSameSession(t *testing.T) {
+	s, pool := newStore(t)
+	ctx := context.Background()
+	if err := s.Create(ctx, mk("a", "alpha-list", domain.VisibilityPublic, domain.StatusOpen, t0)); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 8)
+	for i := range 8 {
+		go func() {
+			_, err := s.CreateAnswer(ctx, tierlist.Submission{ID: fmt.Sprintf("s%d", i), TierlistID: "a", SessionID: "same",
+				Placements: place("i0", "tS", "i1", "tA", "i2", "tB")}, t0)
+			errs <- err
+		}()
+	}
+	created := 0
+	for range 8 {
+		err := <-errs
+		switch {
+		case err == nil:
+			created++
+		case errors.Is(err, tierlist.ErrAlreadySubmitted):
+		default:
+			t.Fatal(err)
+		}
+	}
+	var subs, total int
+	_ = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM submissions), (SELECT COALESCE(sum(count), 0) FROM item_tier_counts)`).Scan(&subs, &total)
+	if created != 1 || subs != 1 || total != 3 {
+		t.Fatalf("created=%d submissions=%d counter total=%d", created, subs, total)
+	}
+}
+
 func TestListPublic(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()

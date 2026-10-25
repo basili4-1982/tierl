@@ -11,6 +11,7 @@ import (
 	"github.com/basili4-1982/tierl/internal/platform/config"
 	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/storage/postgres"
+	"github.com/basili4-1982/tierl/internal/submission"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 	"github.com/basili4-1982/tierl/internal/web"
 	"github.com/basili4-1982/tierl/internal/web/api"
@@ -52,11 +53,18 @@ func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, auth api.A
 	if err != nil {
 		return web.Deps{}, fmt.Errorf("rate limiter: %w", err)
 	}
-	service := tierlist.NewService(postgres.New(pool), users, tierlist.ServiceDeps{})
+	store := postgres.New(pool)
+	service := tierlist.NewService(store, users, tierlist.ServiceDeps{})
+	submissions := submission.NewService(store, store, users, submission.Options{
+		Threshold:  cfg.SimilarityThreshold,
+		MinAnswers: cfg.MinAnswers,
+		MinOverlap: cfg.MinOverlap,
+	})
 	handler := api.New(api.Deps{
-		Tierlists: service,
-		Auth:      auth,
-		Log:       log,
+		Tierlists:   service,
+		Submissions: submissions,
+		Auth:        auth,
+		Log:         log,
 		CreateTierlistLimit: ratelimit.Middleware(limiter,
 			ratelimit.IPKey([]byte(cfg.IPHashSalt), "create_tierlist")),
 	})
