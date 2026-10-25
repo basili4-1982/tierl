@@ -34,21 +34,29 @@ type Deps struct {
 	Tierlists *tierlist.Service
 	Auth      Authenticator
 	Log       *slog.Logger
+	// Accounts serves the email confirmation and password reset endpoints;
+	// nil leaves them unregistered (for example without a database).
+	Accounts Accounts
 	// CreateTierlistLimit wraps POST /tierlists; nil means no extra middleware.
 	CreateTierlistLimit Middleware
+	// ResendVerificationLimit wraps POST /auth/resend-verification.
+	ResendVerificationLimit Middleware
+	// ForgotPasswordLimit wraps POST /auth/forgot-password.
+	ForgotPasswordLimit Middleware
 }
 
 // API is the HTTP handler of the JSON API.
 type API struct {
 	tierlists *tierlist.Service
 	auth      Authenticator
+	accounts  Accounts
 	log       *slog.Logger
 	mux       *http.ServeMux
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	a := &API{tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux()}
+	a := &API{tierlists: d.Tierlists, auth: d.Auth, accounts: d.Accounts, log: d.Log, mux: http.NewServeMux()}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -62,10 +70,28 @@ func New(d Deps) *API {
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+
+	if a.accounts != nil {
+		a.mux.Handle("POST "+Prefix+"/auth/verify-email", http.HandlerFunc(a.verifyEmail))
+		a.mux.Handle("POST "+Prefix+"/auth/reset-password", http.HandlerFunc(a.resetPassword))
+		a.mux.Handle("POST "+Prefix+"/auth/resend-verification",
+			withMiddleware(http.HandlerFunc(a.resendVerification), d.ResendVerificationLimit))
+		a.mux.Handle("POST "+Prefix+"/auth/forgot-password",
+			withMiddleware(http.HandlerFunc(a.forgotPassword), d.ForgotPasswordLimit))
+	}
+
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	})
 	return a
+}
+
+// withMiddleware wraps h when mw is not nil.
+func withMiddleware(h http.Handler, mw Middleware) http.Handler {
+	if mw == nil {
+		return h
+	}
+	return mw(h)
 }
 
 // ServeHTTP implements http.Handler.

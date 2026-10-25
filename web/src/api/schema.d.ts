@@ -50,8 +50,33 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Подтверждение email по токену из письма */
+        /**
+         * Подтверждение email по токену из письма
+         * @description Токен одноразовый и действует 24 часа. После подтверждения
+         *     `email_verified` становится `true`.
+         */
         post: operations["verifyEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/resend-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Повторная отправка письма подтверждения
+         * @description Ответ всегда `202`, независимо от того, существует ли email и
+         *     подтверждён ли он. Повторная выдача инвалидирует предыдущую ссылку.
+         */
+        post: operations["resendVerification"];
         delete?: never;
         options?: never;
         head?: never;
@@ -121,6 +146,7 @@ export interface paths {
         /**
          * Запрос сброса пароля
          * @description Ответ всегда одинаков, независимо от того, существует ли email.
+         *     Ссылка из письма действует 1 час и срабатывает один раз.
          */
         post: operations["forgotPassword"];
         delete?: never;
@@ -140,7 +166,8 @@ export interface paths {
         put?: never;
         /**
          * Установка нового пароля по токену
-         * @description После смены пароля все сессии пользователя сбрасываются.
+         * @description Ссылка действует 1 час и срабатывает один раз. После смены пароля все
+         *     сессии пользователя сбрасываются, остальные reset-токены инвалидируются.
          */
         post: operations["resetPassword"];
         delete?: never;
@@ -452,6 +479,10 @@ export interface components {
             token: string;
         };
         ForgotPasswordRequest: {
+            /** Format: email */
+            email: string;
+        };
+        ResendVerificationRequest: {
             /** Format: email */
             email: string;
         };
@@ -856,6 +887,37 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
         };
     };
+    resendVerification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "email": "anna@example.com"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ResendVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Если адрес зарегистрирован и не подтверждён, письмо отправлено. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -1095,6 +1157,9 @@ export interface operations {
                  *         {
                  *           "label": "Rust",
                  *           "image_url": "https://cdn.example.com/img/rust.png"
+                 *         },
+                 *         {
+                 *           "label": "Zig"
                  *         }
                  *       ]
                  *     }
@@ -1282,6 +1347,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000002"
                  *         }
                  *       ]
                  *     }
@@ -1362,6 +1431,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000001"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
                  *         }
                  *       ]
                  *     }

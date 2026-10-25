@@ -19,6 +19,7 @@ const (
 	codeUniqueViolation     = "23505"
 	codeForeignKeyViolation = "23503"
 	codeCheckViolation      = "23514"
+	codeUndefinedTable      = "42P01"
 
 	slugConstraint = "tierlists_slug_key"
 )

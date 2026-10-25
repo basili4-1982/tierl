@@ -170,3 +170,74 @@ func TestLoad_StorageInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_Mail(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppBaseURL != "http://localhost:8080" {
+		t.Errorf("AppBaseURL = %q", cfg.AppBaseURL)
+	}
+	m := cfg.Mail
+	if m.Host != "" || m.Port != 587 || m.From != "Tierl <no-reply@tierl.local>" ||
+		!m.TLS || m.Timeout != 10*time.Second || m.Lang != "ru" {
+		t.Errorf("mail defaults: %+v", m)
+	}
+	if cfg.AuthEmailBurst != 5 || cfg.AuthEmailInterval != time.Minute {
+		t.Errorf("auth email limits: %d / %v", cfg.AuthEmailBurst, cfg.AuthEmailInterval)
+	}
+
+	cfg, err = Load(env(map[string]string{
+		"TIERL_APP_BASE_URL":                  "https://tierl.example/",
+		"TIERL_SMTP_HOST":                     "mailpit",
+		"TIERL_SMTP_PORT":                     "1025",
+		"TIERL_SMTP_USERNAME":                 "u",
+		"TIERL_SMTP_PASSWORD":                 "p",
+		"TIERL_SMTP_FROM":                     "Tierl <hi@example.com>",
+		"TIERL_SMTP_TLS":                      "false",
+		"TIERL_SMTP_TIMEOUT":                  "3s",
+		"TIERL_MAIL_LANG":                     "EN",
+		"TIERL_RATELIMIT_AUTH_EMAIL_BURST":    "2",
+		"TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL": "90s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppBaseURL != "https://tierl.example" {
+		t.Errorf("AppBaseURL = %q", cfg.AppBaseURL)
+	}
+	m = cfg.Mail
+	if m.Host != "mailpit" || m.Port != 1025 || m.Username != "u" || m.Password != "p" ||
+		m.From != "Tierl <hi@example.com>" || m.TLS || m.Timeout != 3*time.Second || m.Lang != "en" {
+		t.Errorf("mail overrides: %+v", m)
+	}
+	if cfg.AuthEmailBurst != 2 || cfg.AuthEmailInterval != 90*time.Second {
+		t.Errorf("auth email limits: %d / %v", cfg.AuthEmailBurst, cfg.AuthEmailInterval)
+	}
+}
+
+func TestLoad_MailInvalid(t *testing.T) {
+	tests := map[string]map[string]string{
+		"relative base url":   {"TIERL_APP_BASE_URL": "/relative"},
+		"bad base scheme":     {"TIERL_APP_BASE_URL": "ftp://example.com"},
+		"bad smtp port":       {"TIERL_SMTP_PORT": "0"},
+		"huge smtp port":      {"TIERL_SMTP_PORT": "70000"},
+		"bad smtp tls":        {"TIERL_SMTP_TLS": "maybe"},
+		"bad smtp timeout":    {"TIERL_SMTP_TIMEOUT": "soon"},
+		"zero smtp timeout":   {"TIERL_SMTP_TIMEOUT": "0s"},
+		"bad from":            {"TIERL_SMTP_FROM": "not-an-address"},
+		"bad lang":            {"TIERL_MAIL_LANG": "de"},
+		"bad email burst":     {"TIERL_RATELIMIT_AUTH_EMAIL_BURST": "many"},
+		"zero email burst":    {"TIERL_RATELIMIT_AUTH_EMAIL_BURST": "0"},
+		"bad email interval":  {"TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL": "soon"},
+		"zero email interval": {"TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL": "0s"},
+	}
+	for name, vars := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(vars)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}

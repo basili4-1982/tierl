@@ -10,7 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/basili4-1982/tierl/internal/platform/mailer"
 )
 
 // User is an account.
@@ -34,6 +38,8 @@ type Users interface {
 	GetByID(ctx context.Context, id string) (*User, error)
 	// UpdatePasswordHash replaces the stored hash or returns ErrUserNotFound.
 	UpdatePasswordHash(ctx context.Context, id, hash string, now time.Time) error
+	// MarkEmailVerified sets email_verified and updated_at or returns ErrUserNotFound.
+	MarkEmailVerified(ctx context.Context, id string, now time.Time) error
 }
 
 // Options configure a Service. Zero values select safe defaults.
@@ -44,14 +50,36 @@ type Options struct {
 	Now func() time.Time
 	// Rand is the entropy source for IDs and salts; default crypto/rand.
 	Rand io.Reader
+	// Tokens stores one-time email tokens. Without it the email confirmation
+	// and password reset methods return ErrNotConfigured.
+	Tokens TokenStore
+	// Mail delivers letter templates. Nil disables sending; Register still
+	// succeeds, but nothing is delivered.
+	Mail Mailer
+	// Sessions revokes every session of a user after a password reset. It may
+	// be nil until the sessions module is wired in.
+	Sessions SessionRevoker
+	// BaseURL is the public origin used in email links; default
+	// http://localhost:8080.
+	BaseURL string
+	// Lang is the letter language; default Russian.
+	Lang mailer.Lang
+	// Log receives delivery failures. Tokens and links are never logged.
+	Log *slog.Logger
 }
 
 // Service registers and authenticates users.
 type Service struct {
-	users  Users
-	hasher *Hasher
-	now    func() time.Time
-	rand   io.Reader
+	users    Users
+	hasher   *Hasher
+	now      func() time.Time
+	rand     io.Reader
+	tokens   TokenStore
+	mail     Mailer
+	sessions SessionRevoker
+	baseURL  string
+	lang     mailer.Lang
+	log      *slog.Logger
 	// dummyHash is verified when the email is unknown, so that response time
 	// does not reveal whether the account exists.
 	dummyHash string
@@ -68,6 +96,16 @@ func NewService(users Users, opts Options) (*Service, error) {
 	if opts.Rand == nil {
 		opts.Rand = rand.Reader
 	}
+	if opts.BaseURL == "" {
+		opts.BaseURL = "http://localhost:8080"
+	}
+	opts.BaseURL = strings.TrimRight(opts.BaseURL, "/")
+	if opts.Lang == "" {
+		opts.Lang = mailer.LangRU
+	}
+	if opts.Log == nil {
+		opts.Log = slog.New(slog.DiscardHandler)
+	}
 	h, err := NewHasher(opts.Hash)
 	if err != nil {
 		return nil, err
@@ -77,7 +115,12 @@ func NewService(users Users, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: dummy hash: %w", err)
 	}
-	return &Service{users: users, hasher: h, now: opts.Now, rand: opts.Rand, dummyHash: dummy}, nil
+	return &Service{
+		users: users, hasher: h, now: opts.Now, rand: opts.Rand,
+		tokens: opts.Tokens, mail: opts.Mail, sessions: opts.Sessions,
+		baseURL: opts.BaseURL, lang: opts.Lang, log: opts.Log,
+		dummyHash: dummy,
+	}, nil
 }
 
 // RegisterInput is the data of a new account.
@@ -114,6 +157,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 	if err := s.users.Create(ctx, u); err != nil {
 		return nil, fmt.Errorf("auth: register: %w", err)
 	}
+	s.notifyVerification(ctx, u)
 	return u, nil
 }
 

@@ -9,9 +9,18 @@ services:
       TIERL_MIGRATE_ON_START: "true"
       # Dev-only salt; use a random secret outside local development.
       TIERL_IP_HASH_SALT: "dev-only-ip-hash-salt-change-me"
+      # Public origin used in email links.
+      TIERL_APP_BASE_URL: "http://localhost:8080"
+      # Mailpit: every letter is captured at http://localhost:8025.
+      TIERL_SMTP_HOST: "mailpit"
+      TIERL_SMTP_PORT: "1025"
+      TIERL_SMTP_FROM: "Tierl <no-reply@tierl.local>"
+      TIERL_SMTP_TLS: "false"
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
 
   postgres:
     image: postgres:17-alpine
