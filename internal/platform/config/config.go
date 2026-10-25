@@ -45,6 +45,16 @@ type Config struct {
 	// (TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL, default 30s).
 	CreateTierlistInterval time.Duration
 
+	// SimilarityThreshold is the minimal similarity counted as "thinks like
+	// you" (TIERL_SIMILARITY_THRESHOLD, default 0.8).
+	SimilarityThreshold float64
+	// MinAnswers is the number of answers below which only "not enough data"
+	// is shown (TIERL_SIMILARITY_MIN_ANSWERS, default 20).
+	MinAnswers int
+	// MinOverlap is the minimal number of common items for a comparable pair
+	// (TIERL_SIMILARITY_MIN_OVERLAP, default 3).
+	MinOverlap int
+
 	Storage StorageConfig
 }
 
@@ -85,6 +95,11 @@ func Load(getenv func(string) string) (Config, error) {
 		IPHashSalt:             getenv("TIERL_IP_HASH_SALT"),
 		CreateTierlistBurst:    defaultCreateTierlistBurst,
 		CreateTierlistInterval: defaultCreateTierlistInterval,
+
+		// Keep in sync with similarity.Default* (config must stay dependency-free).
+		SimilarityThreshold: 0.80,
+		MinAnswers:          20,
+		MinOverlap:          3,
 	}
 
 	for _, v := range []struct {
@@ -126,6 +141,28 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL: must be positive")
 		}
 		cfg.CreateTierlistInterval = d
+	}
+
+	if raw := strings.TrimSpace(getenv("TIERL_SIMILARITY_THRESHOLD")); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil || v <= 0 || v > 1 {
+			return Config{}, errors.New("TIERL_SIMILARITY_THRESHOLD: must be a number greater than 0 and at most 1")
+		}
+		cfg.SimilarityThreshold = v
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SIMILARITY_MIN_ANSWERS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, errors.New("TIERL_SIMILARITY_MIN_ANSWERS: must be a positive integer")
+		}
+		cfg.MinAnswers = n
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SIMILARITY_MIN_OVERLAP")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return Config{}, errors.New("TIERL_SIMILARITY_MIN_OVERLAP: must be a positive integer")
+		}
+		cfg.MinOverlap = n
 	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {

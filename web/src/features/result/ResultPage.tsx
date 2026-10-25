@@ -212,8 +212,8 @@ function SimilarList({ title, list }: { title: string; list: ResultStats['simila
         <p>Пока нет.</p>
       ) : (
         <ol>
-          {list.map((s) => (
-            <li key={s.result_id}>Сходство {formatSimilarity(s.similarity)}</li>
+          {list.map((s, i) => (
+            <li key={`${i}-${s.similarity}`}>Сходство {formatSimilarity(s.similarity)}</li>
           ))}
         </ol>
       )}

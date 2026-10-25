@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/basili4-1982/tierl/internal/domain"
+	"github.com/basili4-1982/tierl/internal/submission"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
 
@@ -31,24 +32,29 @@ type Middleware func(http.Handler) http.Handler
 
 // Deps are the dependencies of the API handler.
 type Deps struct {
-	Tierlists *tierlist.Service
-	Auth      Authenticator
-	Log       *slog.Logger
+	Tierlists   *tierlist.Service
+	Submissions *submission.Service
+	Auth        Authenticator
+	Log         *slog.Logger
 	// CreateTierlistLimit wraps POST /tierlists; nil means no extra middleware.
 	CreateTierlistLimit Middleware
 }
 
 // API is the HTTP handler of the JSON API.
 type API struct {
-	tierlists *tierlist.Service
-	auth      Authenticator
-	log       *slog.Logger
-	mux       *http.ServeMux
+	tierlists   *tierlist.Service
+	submissions *submission.Service
+	auth        Authenticator
+	log         *slog.Logger
+	mux         *http.ServeMux
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	a := &API{tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux()}
+	a := &API{
+		tierlists: d.Tierlists, submissions: d.Submissions, auth: d.Auth,
+		log: d.Log, mux: http.NewServeMux(),
+	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -57,11 +63,21 @@ func New(d Deps) *API {
 	if d.CreateTierlistLimit != nil {
 		create = d.CreateTierlistLimit(create)
 	}
+	a.mux.HandleFunc("GET "+Prefix+"/csrf", a.getCSRF)
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+	if d.Submissions != nil {
+		a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/submissions", a.createSubmission)
+		a.mux.HandleFunc("PUT "+Prefix+"/tierlists/{slug}/submissions/mine", a.replaceMySubmission)
+		a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}/submissions/mine", a.getMySubmission)
+		a.mux.HandleFunc("GET "+Prefix+"/submissions/mine", a.listMySubmissions)
+		a.mux.HandleFunc("GET "+Prefix+"/me/submissions", a.listUserSubmissions)
+		a.mux.HandleFunc("GET "+Prefix+"/results/{id}", a.getResult)
+		a.mux.HandleFunc("GET "+Prefix+"/results/{id}/stats", a.getResultStats)
+	}
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	})
@@ -116,6 +132,9 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // writeServiceError maps service and domain errors to HTTP responses.
 func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	if a.writeSubmissionError(w, err) {
+		return
+	}
 	var verr *domain.ValidationError
 	switch {
 	case errors.Is(err, tierlist.ErrNotFound):

@@ -253,7 +253,12 @@ export interface paths {
          *     Один ответ на сессию: повторный POST даёт `409 already_submitted`
          *     (в `details.result_id` - существующий результат); чтобы перепройти,
          *     используйте `PUT /tierlists/{slug}/submissions/mine`.
-         *     Нужны ответы по всем элементам опроса.
+         *     Ответ может быть неполным: элементы без размещения считаются
+         *     пропущенными и в сравнении не участвуют. Нужно не меньше 3
+         *     размещённых элементов, иначе `400 too_few_placements`. Каждый элемент
+         *     и тир должны принадлежать опросу. Отвечать можно только пока
+         *     `status = open`; закрытый опрос даёт `409 tierlist_closed`, а
+         *     draft/hidden не видны (`404`). Unlisted принимает ответы по ссылке.
          */
         post: operations["createSubmission"];
         delete?: never;
@@ -276,9 +281,33 @@ export interface paths {
         get: operations["getMySubmission"];
         /**
          * Перепройти опрос
-         * @description Заменяет ответ текущей анонимной (или авторизованной) сессии; идентификатор результата сохраняется.
+         * @description Upsert: заменяет ответ текущей анонимной сессии; идентификатор
+         *     результата сохраняется. Если ответа ещё нет, PUT создаёт его и тоже
+         *     выдаёт cookie `tierl_anon`. В отличие от POST, повторный PUT не даёт
+         *     `409 already_submitted`. Правила полноты и принадлежности те же.
          */
         put: operations["replaceMySubmission"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/submissions/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Все ответы текущей анонимной сессии
+         * @description Только ответы, привязанные к cookie `tierl_anon`; авторизованная
+         *     сессия сюда не примешивается. Без cookie возвращается пустой список.
+         */
+        get: operations["listMySubmissionsByAnon"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -297,7 +326,10 @@ export interface paths {
         };
         /**
          * Результат по id
-         * @description Id - непредсказуемый UUID, ссылкой можно делиться. Возвращает ответ участника вместе с опросом.
+         * @description Id - непредсказуемый UUID, ссылкой можно делиться. Возвращает ответ
+         *     участника вместе с опросом. Закрытый опрос остаётся доступен, а
+         *     draft/hidden результата не отдают (`404`). `is_owner` определяется
+         *     только авторизованной сессией, не cookie `tierl_anon`.
          */
         get: operations["getResult"];
         put?: never;
@@ -319,10 +351,15 @@ export interface paths {
         };
         /**
          * Статистика результата
-         * @description Процент участников, "думающих как ты" (сходство >= порога), распределение
-         *     по тирам для каждого элемента, самые похожие и непохожие ответы.
-         *     При числе ответов меньше минимума `insufficient_data = true`, а
-         *     `like_you_percent`, `similar` и `dissimilar` пусты/null.
+         * @description Процент участников, "думающих как ты" (сходство >= `similarity_threshold`),
+         *     распределение ответов по тирам для каждого элемента, до 5 самых похожих
+         *     и 5 самых непохожих ответов. Пары сравниваются только при пересечении
+         *     не меньше `min_overlap` (по умолчанию 3) элементов.
+         *     При числе ответов меньше `min_submissions` `insufficient_data = true`,
+         *     а `like_you_percent`, `similar` и `dissimilar` пусты/null.
+         *     Ответы в `similar`/`dissimilar` анонимны: идентификаторов, email и IP
+         *     нет, только степень сходства. `percent` в распределении считается от
+         *     числа ответов, разместивших этот элемент (пропуски не размывают долю).
          */
         get: operations["getResultStats"];
         put?: never;
@@ -377,7 +414,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Мои ответы */
+        /**
+         * Мои ответы
+         * @description Только авторизованная сессия `tierl_session`. Cookie `tierl_anon` не
+         *     даёт доступа: по ADR-002 ответы не привязываются к аккаунту, поэтому
+         *     без явного claim список остаётся пустым.
+         */
         get: operations["listMySubmissions"];
         put?: never;
         post?: never;
@@ -587,9 +629,8 @@ export interface components {
             label: string;
             distribution: components["schemas"]["TierCount"][];
         };
-        SimilarResult: {
-            /** Format: uuid */
-            result_id: string;
+        /** @description Агрегат без идентификатора: только степень сходства с ответом участника. */
+        SimilarAnswer: {
             /** @description 1 - sum|ta-tb| / (N*(T-1)) по пересечению элементов. */
             similarity: number;
         };
@@ -601,8 +642,10 @@ export interface components {
             like_you_percent: number | null;
             similarity_threshold: number;
             items: components["schemas"]["ItemDistribution"][];
-            similar: components["schemas"]["SimilarResult"][];
-            dissimilar: components["schemas"]["SimilarResult"][];
+            /** @description До 5 самых похожих ответов, без идентификаторов. */
+            similar: components["schemas"]["SimilarAnswer"][];
+            /** @description До 5 самых непохожих ответов, без идентификаторов. */
+            dissimilar: components["schemas"]["SimilarAnswer"][];
         };
     };
     responses: {
@@ -1095,6 +1138,9 @@ export interface operations {
                  *         {
                  *           "label": "Rust",
                  *           "image_url": "https://cdn.example.com/img/rust.png"
+                 *         },
+                 *         {
+                 *           "label": "Zig"
                  *         }
                  *       ]
                  *     }
@@ -1282,6 +1328,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000002"
                  *         }
                  *       ]
                  *     }
@@ -1300,7 +1350,24 @@ export interface operations {
                     "application/json": components["schemas"]["Submission"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description Некорректный JSON или меньше 3 размещённых элементов. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "code": "too_few_placements",
+                     *       "message": "Разместите не меньше 3 элементов",
+                     *       "details": {
+                     *         "min_placements": 3
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             /** @description Ответ уже есть или опрос закрыт. */
@@ -1362,6 +1429,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000001"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
                  *         }
                  *       ]
                  *     }
@@ -1398,6 +1469,26 @@ export interface operations {
                 };
             };
             422: components["responses"]["ValidationFailed"];
+        };
+    };
+    listMySubmissionsByAnon: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ответы анонимной сессии, новые изменения первыми. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionPage"];
+                };
+            };
         };
     };
     getResult: {
@@ -1444,7 +1535,7 @@ export interface operations {
                      * @example {
                      *       "total_submissions": 42,
                      *       "insufficient_data": false,
-                     *       "min_submissions": 10,
+                     *       "min_submissions": 20,
                      *       "like_you_percent": 37.5,
                      *       "similarity_threshold": 0.8,
                      *       "items": [
@@ -1467,13 +1558,14 @@ export interface operations {
                      *       ],
                      *       "similar": [
                      *         {
-                     *           "result_id": "11111111-2222-4333-8444-555555555555",
                      *           "similarity": 0.97
+                     *         },
+                     *         {
+                     *           "similarity": 0.83
                      *         }
                      *       ],
                      *       "dissimilar": [
                      *         {
-                     *           "result_id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
                      *           "similarity": 0.12
                      *         }
                      *       ]

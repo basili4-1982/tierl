@@ -85,6 +85,38 @@ func TestLoad_Invalid(t *testing.T) {
 	}
 }
 
+func TestLoad_Similarity(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SimilarityThreshold != 0.8 || cfg.MinAnswers != 20 || cfg.MinOverlap != 3 {
+		t.Errorf("defaults: %+v", cfg)
+	}
+	cfg, err = Load(env(map[string]string{
+		"TIERL_SIMILARITY_THRESHOLD": "0.9", "TIERL_SIMILARITY_MIN_ANSWERS": "50", "TIERL_SIMILARITY_MIN_OVERLAP": "4",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SimilarityThreshold != 0.9 || cfg.MinAnswers != 50 || cfg.MinOverlap != 4 {
+		t.Errorf("overrides: %+v", cfg)
+	}
+	for _, vars := range []map[string]string{
+		{"TIERL_SIMILARITY_THRESHOLD": "high"},
+		{"TIERL_SIMILARITY_THRESHOLD": "0"},
+		{"TIERL_SIMILARITY_THRESHOLD": "-0.1"},
+		{"TIERL_SIMILARITY_THRESHOLD": "1.1"},
+		{"TIERL_SIMILARITY_MIN_ANSWERS": "0"},
+		{"TIERL_SIMILARITY_MIN_ANSWERS": "many"},
+		{"TIERL_SIMILARITY_MIN_OVERLAP": "0"},
+	} {
+		if _, err := Load(env(vars)); err == nil {
+			t.Errorf("%v: expected error", vars)
+		}
+	}
+}
+
 func TestLoad_MigrateOnStart(t *testing.T) {
 	cfg, err := Load(env(nil))
 	if err != nil || cfg.MigrateOnStart {
