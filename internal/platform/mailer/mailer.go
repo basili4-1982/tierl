@@ -40,7 +40,8 @@ type Config struct {
 	// From is the envelope and header sender, for example
 	// "Tierl <no-reply@tierl.local>".
 	From string
-	// TLS upgrades the connection with STARTTLS when the server offers it.
+	// TLS requires the server to offer STARTTLS; without it Send fails rather
+	// than leaking the message over plaintext.
 	TLS bool
 	// Timeout bounds one delivery; the zero value means DefaultTimeout.
 	Timeout time.Duration

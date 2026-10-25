@@ -30,6 +30,8 @@ const (
 	defaultSMTPPort    = 587
 	defaultSMTPFrom    = "Tierl <no-reply@tierl.local>"
 	defaultSMTPTimeout = 10 * time.Second
+	defaultMailWorkers = 2
+	defaultMailQueue   = 128
 	defaultMailLang    = "ru"
 )
 
@@ -82,10 +84,17 @@ type MailConfig struct {
 	Password string
 	// From is the envelope sender (TIERL_SMTP_FROM).
 	From string
-	// TLS enables STARTTLS when the server offers it (TIERL_SMTP_TLS, default true).
+	// TLS requires the server to offer STARTTLS; a plaintext fallback is an
+	// error (TIERL_SMTP_TLS, default true).
 	TLS bool
 	// Timeout bounds one delivery (TIERL_SMTP_TIMEOUT, default 10s).
 	Timeout time.Duration
+	// Workers is the number of asynchronous delivery goroutines
+	// (TIERL_MAIL_WORKERS, default 2).
+	Workers int
+	// QueueSize is the buffer between HTTP handlers and workers
+	// (TIERL_MAIL_QUEUE, default 128).
+	QueueSize int
 	// Lang is the letter language: ru (default) or en (TIERL_MAIL_LANG).
 	Lang string
 }
@@ -245,14 +254,16 @@ func Load(getenv func(string) string) (Config, error) {
 // logged (development mode without a mail server).
 func loadMail(getenv func(string) string) (MailConfig, error) {
 	m := MailConfig{
-		Host:     strings.TrimSpace(getenv("TIERL_SMTP_HOST")),
-		Port:     defaultSMTPPort,
-		Username: strings.TrimSpace(getenv("TIERL_SMTP_USERNAME")),
-		Password: getenv("TIERL_SMTP_PASSWORD"),
-		From:     valueOr(getenv("TIERL_SMTP_FROM"), defaultSMTPFrom),
-		TLS:      true,
-		Timeout:  defaultSMTPTimeout,
-		Lang:     strings.ToLower(valueOr(getenv("TIERL_MAIL_LANG"), defaultMailLang)),
+		Host:      strings.TrimSpace(getenv("TIERL_SMTP_HOST")),
+		Port:      defaultSMTPPort,
+		Username:  strings.TrimSpace(getenv("TIERL_SMTP_USERNAME")),
+		Password:  getenv("TIERL_SMTP_PASSWORD"),
+		From:      valueOr(getenv("TIERL_SMTP_FROM"), defaultSMTPFrom),
+		TLS:       true,
+		Timeout:   defaultSMTPTimeout,
+		Workers:   defaultMailWorkers,
+		QueueSize: defaultMailQueue,
+		Lang:      strings.ToLower(valueOr(getenv("TIERL_MAIL_LANG"), defaultMailLang)),
 	}
 	if raw := strings.TrimSpace(getenv("TIERL_SMTP_PORT")); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -277,6 +288,23 @@ func loadMail(getenv func(string) string) (MailConfig, error) {
 			return MailConfig{}, errors.New("TIERL_SMTP_TIMEOUT: must be positive")
 		}
 		m.Timeout = d
+	}
+	for _, v := range []struct {
+		name string
+		dst  *int
+	}{
+		{"TIERL_MAIL_WORKERS", &m.Workers},
+		{"TIERL_MAIL_QUEUE", &m.QueueSize},
+	} {
+		raw := strings.TrimSpace(getenv(v.name))
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return MailConfig{}, fmt.Errorf("%s: must be a positive integer", v.name)
+		}
+		*v.dst = n
 	}
 	if m.Lang != "ru" && m.Lang != "en" {
 		return MailConfig{}, fmt.Errorf("TIERL_MAIL_LANG: %q is not ru or en", m.Lang)

@@ -181,7 +181,8 @@ func TestLoad_Mail(t *testing.T) {
 	}
 	m := cfg.Mail
 	if m.Host != "" || m.Port != 587 || m.From != "Tierl <no-reply@tierl.local>" ||
-		!m.TLS || m.Timeout != 10*time.Second || m.Lang != "ru" {
+		!m.TLS || m.Timeout != 10*time.Second || m.Lang != "ru" ||
+		m.Workers != 2 || m.QueueSize != 128 {
 		t.Errorf("mail defaults: %+v", m)
 	}
 	if cfg.AuthEmailBurst != 5 || cfg.AuthEmailInterval != time.Minute {
@@ -197,6 +198,8 @@ func TestLoad_Mail(t *testing.T) {
 		"TIERL_SMTP_FROM":                     "Tierl <hi@example.com>",
 		"TIERL_SMTP_TLS":                      "false",
 		"TIERL_SMTP_TIMEOUT":                  "3s",
+		"TIERL_MAIL_WORKERS":                  "4",
+		"TIERL_MAIL_QUEUE":                    "10",
 		"TIERL_MAIL_LANG":                     "EN",
 		"TIERL_RATELIMIT_AUTH_EMAIL_BURST":    "2",
 		"TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL": "90s",
@@ -209,7 +212,8 @@ func TestLoad_Mail(t *testing.T) {
 	}
 	m = cfg.Mail
 	if m.Host != "mailpit" || m.Port != 1025 || m.Username != "u" || m.Password != "p" ||
-		m.From != "Tierl <hi@example.com>" || m.TLS || m.Timeout != 3*time.Second || m.Lang != "en" {
+		m.From != "Tierl <hi@example.com>" || m.TLS || m.Timeout != 3*time.Second || m.Lang != "en" ||
+		m.Workers != 4 || m.QueueSize != 10 {
 		t.Errorf("mail overrides: %+v", m)
 	}
 	if cfg.AuthEmailBurst != 2 || cfg.AuthEmailInterval != 90*time.Second {
@@ -228,6 +232,10 @@ func TestLoad_MailInvalid(t *testing.T) {
 		"zero smtp timeout":   {"TIERL_SMTP_TIMEOUT": "0s"},
 		"bad from":            {"TIERL_SMTP_FROM": "not-an-address"},
 		"bad lang":            {"TIERL_MAIL_LANG": "de"},
+		"bad mail workers":    {"TIERL_MAIL_WORKERS": "many"},
+		"zero mail workers":   {"TIERL_MAIL_WORKERS": "0"},
+		"bad mail queue":      {"TIERL_MAIL_QUEUE": "many"},
+		"zero mail queue":     {"TIERL_MAIL_QUEUE": "0"},
 		"bad email burst":     {"TIERL_RATELIMIT_AUTH_EMAIL_BURST": "many"},
 		"zero email burst":    {"TIERL_RATELIMIT_AUTH_EMAIL_BURST": "0"},
 		"bad email interval":  {"TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL": "soon"},

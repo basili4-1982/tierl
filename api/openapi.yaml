@@ -224,6 +224,7 @@ paths:
         '202': { description: "Если адрес зарегистрирован, письмо отправлено." }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /auth/reset-password:
     post:
@@ -889,7 +890,7 @@ components:
       type: object
       required: [email]
       properties:
-        email: { type: string, format: email }
+        email: { type: string, format: email, maxLength: 254 }
     ResendVerificationRequest:
       type: object
       required: [email]

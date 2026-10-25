@@ -88,13 +88,12 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("auth: verify email: %w", err)
 	}
-	if err := s.users.MarkEmailVerified(ctx, stored.UserID, now); err != nil {
-		return fmt.Errorf("auth: verify email: %w", err)
-	}
 	// A verified address makes any other confirmation link pointless.
 	if err := s.tokens.Invalidate(ctx, stored.UserID, PurposeVerifyEmail, now); err != nil {
-		s.log.ErrorContext(ctx, "auth: invalidate verify tokens failed",
-			slog.String("user_id", stored.UserID), slog.Any("error", err))
+		return fmt.Errorf("auth: verify email: invalidate other tokens: %w", err)
+	}
+	if err := s.users.MarkEmailVerified(ctx, stored.UserID, now); err != nil {
+		return fmt.Errorf("auth: verify email: %w", err)
 	}
 	return nil
 }
@@ -182,20 +181,18 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	if err != nil {
 		return fmt.Errorf("auth: reset password: %w", err)
 	}
-	if err := s.users.UpdatePasswordHash(ctx, stored.UserID, passwordHash, now); err != nil {
-		return fmt.Errorf("auth: reset password: %w", err)
-	}
-	if err := s.tokens.Invalidate(ctx, stored.UserID, PurposeResetPassword, now); err != nil {
-		s.log.ErrorContext(ctx, "auth: invalidate reset tokens failed",
-			slog.String("user_id", stored.UserID), slog.Any("error", err))
-	}
+	// Revoke sessions before changing the hash: if revocation fails, the
+	// password is untouched and the user can request another link.
 	if s.sessions != nil {
 		if _, err := s.sessions.LogoutAll(ctx, stored.UserID); err != nil {
-			// The password is already changed; report the failure in the log
-			// but do not pretend the reset failed.
-			s.log.ErrorContext(ctx, "auth: revoke sessions after password reset failed",
-				slog.String("user_id", stored.UserID), slog.Any("error", err))
+			return fmt.Errorf("auth: reset password: revoke sessions: %w", err)
 		}
+	}
+	if err := s.tokens.Invalidate(ctx, stored.UserID, PurposeResetPassword, now); err != nil {
+		return fmt.Errorf("auth: reset password: invalidate other tokens: %w", err)
+	}
+	if err := s.users.UpdatePasswordHash(ctx, stored.UserID, passwordHash, now); err != nil {
+		return fmt.Errorf("auth: reset password: %w", err)
 	}
 	return nil
 }

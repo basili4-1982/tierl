@@ -36,6 +36,15 @@ func (s *TokenStore) Issue(ctx context.Context, t *auth.OneTimeToken) error {
 		return fmt.Errorf("postgres: begin issue token: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Serialize issuance per user: two concurrent resends must not leave two
+	// active tokens. The partial unique index is the second line of defence.
+	var locked string
+	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, t.UserID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return auth.ErrUserNotFound
+		}
+		return fmt.Errorf("postgres: lock user for token: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE one_time_tokens SET used_at = $3
 		WHERE user_id = $1 AND purpose = $2 AND used_at IS NULL`,

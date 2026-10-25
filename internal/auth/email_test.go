@@ -3,10 +3,12 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -410,9 +412,279 @@ func TestTokenHashIsStable(t *testing.T) {
 	if hex.EncodeToString(hash) != hex.EncodeToString(want[:]) {
 		t.Fatal("token hash mismatch")
 	}
-	for _, bad := range []string{"", "short", strings.Repeat("a", 42), raw + "x", raw + "="} {
+	for _, bad := range []string{"", "short", strings.Repeat("a", 42), raw + "x", raw + "=", strings.Repeat("!", 43)} {
 		if _, ok := hashOneTimeToken(bad); ok {
 			t.Errorf("token %q must be rejected", bad)
 		}
 	}
 }
+
+// slowMailer simulates a slow SMTP server.
+type slowMailer struct {
+	delay time.Duration
+	inner Mailer
+}
+
+func (m *slowMailer) Send(ctx context.Context, msg mailer.Message) error {
+	select {
+	case <-time.After(m.delay):
+		return m.inner.Send(ctx, msg)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestForgotPasswordTimingDoesNotDependOnEmailExistence(t *testing.T) {
+	const delay = 400 * time.Millisecond
+	users := newMem()
+	tokens := newMemTokens()
+	capture := &mailertest.Capture{}
+	async, err := mailer.NewAsync(&slowMailer{delay: delay, inner: capture}, mailer.AsyncConfig{
+		Workers: 1, QueueSize: 8, Timeout: 5 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(users, Options{
+		Hash: fast, Now: func() time.Time { return time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC) },
+		Tokens: tokens, Mail: async, BaseURL: "https://tierl.example",
+		Log: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Register(context.Background(), RegisterInput{
+		Email: "anna@example.com", Password: goodPassword, DisplayName: "Анна",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	if err := svc.ForgotPassword(ctx, "anna@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	known := time.Since(start)
+	start = time.Now()
+	if err := svc.ForgotPassword(ctx, "nobody@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	unknown := time.Since(start)
+
+	// The handler must not wait for SMTP: half the artificial SMTP delay is a
+	// generous bound that still fails if delivery becomes synchronous.
+	if known > delay/2 || unknown > delay/2 {
+		t.Fatalf("forgot is synchronous: known=%s unknown=%s (smtp delay %s)", known, unknown, delay)
+	}
+	diff := known - unknown
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > delay/2 {
+		t.Fatalf("timing reveals existence: known=%s unknown=%s", known, unknown)
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := async.Close(closeCtx); err != nil {
+		t.Fatal(err)
+	}
+	if capture.Len() != 2 {
+		t.Fatalf("captured %d letters, want 2", capture.Len())
+	}
+	if got := async.Stats(); got.Dropped != 0 {
+		t.Fatalf("queue dropped letters: %+v", got)
+	}
+}
+
+func TestVerifyEmailStoreErrors(t *testing.T) {
+	t.Run("consume error", func(t *testing.T) {
+		env := newEmailEnv(t)
+		env.register(t, "anna@example.com")
+		msg, _ := env.mail.Last()
+		env.tokens.failOn, env.tokens.failErr = "consume", errors.New("db down")
+		if err := env.svc.VerifyEmail(context.Background(), tokenFrom(t, msg)); err == nil {
+			t.Fatal("consume error must be reported")
+		}
+	})
+	t.Run("invalidate error", func(t *testing.T) {
+		env := newEmailEnv(t)
+		u := env.register(t, "anna@example.com")
+		msg, _ := env.mail.Last()
+		env.tokens.failOn, env.tokens.failErr = "invalidate", errors.New("db down")
+		if err := env.svc.VerifyEmail(context.Background(), tokenFrom(t, msg)); err == nil {
+			t.Fatal("invalidate error must be reported")
+		}
+		if got, _ := env.users.GetByID(context.Background(), u.ID); got.EmailVerified {
+			t.Fatal("email must not be marked verified when cleanup failed")
+		}
+	})
+	t.Run("mark error", func(t *testing.T) {
+		env := newEmailEnv(t)
+		raw := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
+		hash, _ := hashOneTimeToken(raw)
+		if err := env.tokens.Issue(context.Background(), &OneTimeToken{
+			ID: "ghost-token", UserID: "ghost", Purpose: PurposeVerifyEmail, TokenHash: hash,
+			CreatedAt: env.now, ExpiresAt: env.now.Add(VerifyEmailTTL),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.svc.VerifyEmail(context.Background(), raw); err == nil {
+			t.Fatal("unknown user must be reported")
+		}
+	})
+}
+
+func TestResetPasswordPropagatesErrors(t *testing.T) {
+	setup := func(t *testing.T) (*emailEnv, string) {
+		t.Helper()
+		env := newEmailEnv(t)
+		env.register(t, "anna@example.com")
+		if err := env.svc.ForgotPassword(context.Background(), "anna@example.com"); err != nil {
+			t.Fatal(err)
+		}
+		msg, _ := env.mail.Last()
+		return env, tokenFrom(t, msg)
+	}
+
+	t.Run("revoke sessions error", func(t *testing.T) {
+		env, token := setup(t)
+		env.sessions.err = errors.New("sessions db down")
+		if err := env.svc.ResetPassword(context.Background(), token, "another-long-password"); err == nil {
+			t.Fatal("revocation error must fail the reset")
+		}
+		if _, err := env.svc.Login(context.Background(), "anna@example.com", goodPassword); err != nil {
+			t.Fatalf("password must stay unchanged: %v", err)
+		}
+	})
+	t.Run("invalidate tokens error", func(t *testing.T) {
+		env, token := setup(t)
+		env.tokens.failOn, env.tokens.failErr = "invalidate", errors.New("db down")
+		if err := env.svc.ResetPassword(context.Background(), token, "another-long-password"); err == nil {
+			t.Fatal("invalidate error must fail the reset")
+		}
+		if _, err := env.svc.Login(context.Background(), "anna@example.com", goodPassword); err != nil {
+			t.Fatalf("password must stay unchanged: %v", err)
+		}
+	})
+	t.Run("update hash error", func(t *testing.T) {
+		env, token := setup(t)
+		env.users.failUpd = errors.New("db down")
+		if err := env.svc.ResetPassword(context.Background(), token, "another-long-password"); err == nil {
+			t.Fatal("update error must fail the reset")
+		}
+		if env.sessions.calls != 1 {
+			t.Fatalf("sessions must be revoked before the failed update, calls=%d", env.sessions.calls)
+		}
+	})
+	t.Run("consume error", func(t *testing.T) {
+		env, token := setup(t)
+		env.tokens.failOn, env.tokens.failErr = "consume", errors.New("db down")
+		if err := env.svc.ResetPassword(context.Background(), token, "another-long-password"); err == nil {
+			t.Fatal("consume error must be reported")
+		}
+	})
+	t.Run("hash error", func(t *testing.T) {
+		env, token := setup(t)
+		env.svc.hasher.rand = failingReader{}
+		if err := env.svc.ResetPassword(context.Background(), token, "another-long-password"); err == nil {
+			t.Fatal("hash error must be reported")
+		}
+		if _, err := env.svc.Login(context.Background(), "anna@example.com", goodPassword); err != nil {
+			t.Fatalf("password must stay unchanged: %v", err)
+		}
+	})
+}
+
+func TestIssueAndSendErrorsAreContained(t *testing.T) {
+	t.Run("token store failure during register", func(t *testing.T) {
+		env := newEmailEnv(t)
+		env.tokens.failOn, env.tokens.failErr = "issue", errors.New("db down")
+		if _, err := env.svc.Register(context.Background(), RegisterInput{
+			Email: "anna@example.com", Password: goodPassword, DisplayName: "Анна",
+		}); err != nil {
+			t.Fatalf("registration must succeed without the letter: %v", err)
+		}
+		if env.mail.Len() != 0 {
+			t.Fatal("no letter must be sent")
+		}
+		if !strings.Contains(env.logs.String(), "send verification email failed") {
+			t.Fatalf("failure not logged: %s", env.logs)
+		}
+	})
+	t.Run("token generation failure during forgot", func(t *testing.T) {
+		env := newEmailEnv(t)
+		env.register(t, "anna@example.com")
+		env.svc.rand = failingReader{}
+		if err := env.svc.ForgotPassword(context.Background(), "anna@example.com"); err != nil {
+			t.Fatal("forgot must stay silent")
+		}
+		if !strings.Contains(env.logs.String(), "forgot password failed") {
+			t.Fatalf("failure not logged: %s", env.logs)
+		}
+	})
+	t.Run("id generation failure during forgot", func(t *testing.T) {
+		env := newEmailEnv(t)
+		env.register(t, "anna@example.com")
+		env.svc.rand = io.LimitReader(rand.Reader, 32)
+		if err := env.svc.ForgotPassword(context.Background(), "anna@example.com"); err != nil {
+			t.Fatal("forgot must stay silent")
+		}
+		if !strings.Contains(env.logs.String(), "forgot password failed") {
+			t.Fatalf("failure not logged: %s", env.logs)
+		}
+	})
+	t.Run("user lookup failure", func(t *testing.T) {
+		env := newEmailEnv(t)
+		env.users.failGet = errors.New("db down")
+		if err := env.svc.ForgotPassword(context.Background(), "anna@example.com"); err == nil {
+			t.Fatal("a database error is not an enumeration signal and must be reported")
+		}
+		if err := env.svc.ResendVerification(context.Background(), "anna@example.com"); err == nil {
+			t.Fatal("resend must report a database error")
+		}
+	})
+}
+
+func TestInvalidBaseURLStillRendersRelativeLink(t *testing.T) {
+	env := newEmailEnv(t)
+	env.register(t, "anna@example.com")
+	svc, err := NewService(env.users, Options{
+		Hash: fast, Now: func() time.Time { return env.now },
+		Tokens: env.tokens, Mail: env.mail, BaseURL: "://bad",
+		Log: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ForgotPassword(context.Background(), "anna@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := env.mail.Last()
+	if !strings.Contains(msg.Text, "/reset-password?token=") {
+		t.Fatalf("link missing: %s", msg.Text)
+	}
+}
+
+func TestResetPasswordWithoutSessionStore(t *testing.T) {
+	env := newEmailEnv(t)
+	env.register(t, "anna@example.com")
+	svc, err := NewService(env.users, Options{
+		Hash: fast, Now: func() time.Time { return env.now },
+		Tokens: env.tokens, Mail: env.mail,
+		Log: slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ForgotPassword(context.Background(), "anna@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	msg, _ := env.mail.Last()
+	if err := svc.ResetPassword(context.Background(), tokenFrom(t, msg), "another-long-password"); err != nil {
+		t.Fatalf("reset without a session store: %v", err)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("no entropy") }

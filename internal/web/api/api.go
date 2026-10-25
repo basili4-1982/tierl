@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/basili4-1982/tierl/internal/domain"
+	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
 
@@ -43,20 +44,31 @@ type Deps struct {
 	ResendVerificationLimit Middleware
 	// ForgotPasswordLimit wraps POST /auth/forgot-password.
 	ForgotPasswordLimit Middleware
+	// VerifyEmailLimit wraps POST /auth/verify-email.
+	VerifyEmailLimit Middleware
+	// ResetPasswordLimit wraps POST /auth/reset-password.
+	ResetPasswordLimit Middleware
+	// EmailLimiter limits forgot/resend by the email in the body; the IP
+	// middleware above still applies. Nil disables the per-email dimension.
+	EmailLimiter ratelimit.Limiter
 }
 
 // API is the HTTP handler of the JSON API.
 type API struct {
-	tierlists *tierlist.Service
-	auth      Authenticator
-	accounts  Accounts
-	log       *slog.Logger
-	mux       *http.ServeMux
+	tierlists    *tierlist.Service
+	auth         Authenticator
+	accounts     Accounts
+	emailLimiter ratelimit.Limiter
+	log          *slog.Logger
+	mux          *http.ServeMux
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	a := &API{tierlists: d.Tierlists, auth: d.Auth, accounts: d.Accounts, log: d.Log, mux: http.NewServeMux()}
+	a := &API{
+		tierlists: d.Tierlists, auth: d.Auth, accounts: d.Accounts,
+		emailLimiter: d.EmailLimiter, log: d.Log, mux: http.NewServeMux(),
+	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -72,8 +84,10 @@ func New(d Deps) *API {
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
 
 	if a.accounts != nil {
-		a.mux.Handle("POST "+Prefix+"/auth/verify-email", http.HandlerFunc(a.verifyEmail))
-		a.mux.Handle("POST "+Prefix+"/auth/reset-password", http.HandlerFunc(a.resetPassword))
+		a.mux.Handle("POST "+Prefix+"/auth/verify-email",
+			withMiddleware(http.HandlerFunc(a.verifyEmail), d.VerifyEmailLimit))
+		a.mux.Handle("POST "+Prefix+"/auth/reset-password",
+			withMiddleware(http.HandlerFunc(a.resetPassword), d.ResetPasswordLimit))
 		a.mux.Handle("POST "+Prefix+"/auth/resend-verification",
 			withMiddleware(http.HandlerFunc(a.resendVerification), d.ResendVerificationLimit))
 		a.mux.Handle("POST "+Prefix+"/auth/forgot-password",

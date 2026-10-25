@@ -39,34 +39,41 @@ func setup(ctx context.Context, cfg config.Config, log *slog.Logger) (web.Deps, 
 	// TODO(#23): replace guestAuth with the session-based authenticator and
 	// noUsers with the real user directory once the sessions module lands.
 	// Email confirmation and password reset are already wired below.
-	deps, err := newDeps(pool, cfg, log, guestAuth{}, noUsers{})
+	deps, closeMail, err := newDeps(pool, cfg, log, guestAuth{}, noUsers{})
 	if err != nil {
 		pool.Close()
 		return web.Deps{}, nil, err
 	}
-	return deps, pool.Close, nil
+	return deps, func() {
+		closeMail()
+		pool.Close()
+	}, nil
 }
 
-// newDeps assembles the API handler on top of an open pool.
-func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authn api.Authenticator, users tierlist.Users) (web.Deps, error) {
+// mailShutdownTimeout bounds the delivery drain on shutdown.
+const mailShutdownTimeout = 5 * time.Second
+
+// newDeps assembles the API handler on top of an open pool. The returned func
+// drains the async mail queue and is always safe to call.
+func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authn api.Authenticator, users tierlist.Users) (web.Deps, func(), error) {
 	limiter, err := ratelimit.NewMemory(ratelimit.Config{
 		Burst:    cfg.CreateTierlistBurst,
 		Interval: cfg.CreateTierlistInterval,
 	})
 	if err != nil {
-		return web.Deps{}, fmt.Errorf("rate limiter: %w", err)
+		return web.Deps{}, nil, fmt.Errorf("rate limiter: %w", err)
 	}
 	emailLimiter, err := ratelimit.NewMemory(ratelimit.Config{
 		Burst:    emailBurst(cfg),
 		Interval: emailInterval(cfg),
 	})
 	if err != nil {
-		return web.Deps{}, fmt.Errorf("email rate limiter: %w", err)
+		return web.Deps{}, nil, fmt.Errorf("email rate limiter: %w", err)
 	}
 
-	accounts, err := newAccounts(pool, cfg, log)
+	accounts, closeMail, err := newAccounts(pool, cfg, log)
 	if err != nil {
-		return web.Deps{}, err
+		return web.Deps{}, nil, err
 	}
 
 	service := tierlist.NewService(postgres.New(pool), users, tierlist.ServiceDeps{})
@@ -81,14 +88,19 @@ func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authn api.
 			ratelimit.IPKey([]byte(cfg.IPHashSalt), "resend_verification")),
 		ForgotPasswordLimit: ratelimit.Middleware(emailLimiter,
 			ratelimit.IPKey([]byte(cfg.IPHashSalt), "forgot_password")),
+		VerifyEmailLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "verify_email")),
+		ResetPasswordLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "reset_password")),
+		EmailLimiter: emailLimiter,
 	})
-	return web.Deps{API: handler, Ready: pool.Ping}, nil
+	return web.Deps{API: handler, Ready: pool.Ping}, closeMail, nil
 }
 
-// newAccounts builds the auth service with the one-time token store, mailer
-// and session revoker.
-func newAccounts(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (*auth.Service, error) {
-	mail, err := mailer.NewSender(mailer.Config{
+// newAccounts builds the auth service with the one-time token store, async
+// mail queue and session revoker. The returned func drains the queue.
+func newAccounts(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (*auth.Service, func(), error) {
+	base, err := mailer.NewSender(mailer.Config{
 		Host:     cfg.Mail.Host,
 		Port:     cfg.Mail.Port,
 		Username: cfg.Mail.Username,
@@ -98,8 +110,25 @@ func newAccounts(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (*auth
 		Timeout:  cfg.Mail.Timeout,
 	}, log)
 	if err != nil {
-		return nil, fmt.Errorf("mailer: %w", err)
+		return nil, nil, fmt.Errorf("mailer: %w", err)
 	}
+	mail, err := mailer.NewAsync(base, mailer.AsyncConfig{
+		Workers:   cfg.Mail.Workers,
+		QueueSize: cfg.Mail.QueueSize,
+		Timeout:   cfg.Mail.Timeout,
+	}, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mailer queue: %w", err)
+	}
+	closeMail := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), mailShutdownTimeout)
+		defer cancel()
+		if err := mail.Close(ctx); err != nil {
+			log.Warn("mail queue shutdown incomplete", slog.Any("error", err),
+				slog.Uint64("dropped", mail.Stats().Dropped))
+		}
+	}
+
 	svc, err := auth.NewService(postgres.NewUserStore(pool), auth.Options{
 		Hash: auth.HashParams{
 			MemoryKiB:   cfg.Argon2MemoryKiB,
@@ -114,9 +143,10 @@ func newAccounts(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (*auth
 		Log:      log,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("auth service: %w", err)
+		closeMail()
+		return nil, nil, fmt.Errorf("auth service: %w", err)
 	}
-	return svc, nil
+	return svc, closeMail, nil
 }
 
 // emailBurst and emailInterval apply defaults for configs built directly in

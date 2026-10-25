@@ -96,11 +96,12 @@ func (s *SMTPSender) Send(ctx context.Context, m Message) error {
 	defer func() { _ = c.Close() }()
 
 	if s.useTLS {
-		if ok, _ := c.Extension("STARTTLS"); ok {
-			tlsCfg := &tls.Config{ServerName: s.host, MinVersion: tls.VersionTLS12}
-			if err := c.StartTLS(tlsCfg); err != nil {
-				return fmt.Errorf("mailer: starttls: %w", err)
-			}
+		if ok, _ := c.Extension("STARTTLS"); !ok {
+			return errors.New("mailer: server does not offer STARTTLS, refusing to send plaintext")
+		}
+		tlsCfg := &tls.Config{ServerName: s.host, MinVersion: tls.VersionTLS12}
+		if err := c.StartTLS(tlsCfg); err != nil {
+			return fmt.Errorf("mailer: starttls: %w", err)
 		}
 	}
 	if s.username != "" {

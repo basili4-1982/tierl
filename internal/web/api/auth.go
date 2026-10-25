@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/basili4-1982/tierl/internal/auth"
+	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 )
 
 // Accounts is the subset of the auth service used by the email endpoints.
@@ -51,6 +52,9 @@ func (a *API) resendVerification(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if !a.allowEmail(w, "resend_verification", req.Email) {
+		return
+	}
 	if err := a.accounts.ResendVerification(r.Context(), req.Email); err != nil {
 		a.writeAuthError(w, r, err)
 		return
@@ -63,6 +67,9 @@ func (a *API) resendVerification(w http.ResponseWriter, r *http.Request) {
 func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req emailRequest
 	if !decode(w, r, &req) {
+		return
+	}
+	if !a.allowEmail(w, "forgot_password", req.Email) {
 		return
 	}
 	if err := a.accounts.ForgotPassword(r.Context(), req.Email); err != nil {
@@ -83,6 +90,21 @@ func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// allowEmail applies the per-email rate limit in addition to the per-IP
+// middleware. A malformed or empty email is still counted, so the endpoint
+// cannot be used to probe addresses quickly.
+func (a *API) allowEmail(w http.ResponseWriter, scope, email string) bool {
+	if a.emailLimiter == nil {
+		return true
+	}
+	d := a.emailLimiter.Allow(ratelimit.EmailKey(scope, email))
+	if d.Allowed {
+		return true
+	}
+	ratelimit.WriteLimited(w, d.RetryAfter)
+	return false
 }
 
 // writeAuthError maps auth errors to the Error schema.

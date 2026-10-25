@@ -188,3 +188,60 @@ func TestAuthRateLimits(t *testing.T) {
 		t.Fatalf("resend limit = %d", rec.Code)
 	}
 }
+
+func TestVerifyAndResetRateLimits(t *testing.T) {
+	limiter, err := ratelimit.NewMemory(ratelimit.Config{Burst: 1, Interval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := func(scope string) api.Middleware {
+		return ratelimit.Middleware(limiter, ratelimit.IPKey([]byte("salt"), scope))
+	}
+	h := api.New(api.Deps{
+		Accounts:           &stubAccounts{},
+		Log:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		VerifyEmailLimit:   ip("verify_email"),
+		ResetPasswordLimit: ip("reset_password"),
+	})
+
+	if rec := authCall(t, h, "/auth/verify-email", `{"token":"t"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("first verify = %d", rec.Code)
+	}
+	wantError(t, authCall(t, h, "/auth/verify-email", `{"token":"t"}`), http.StatusTooManyRequests, "rate_limited")
+
+	reset := `{"token":"t","new_password":"another-long-password"}`
+	if rec := authCall(t, h, "/auth/reset-password", reset); rec.Code != http.StatusNoContent {
+		t.Fatalf("first reset = %d", rec.Code)
+	}
+	wantError(t, authCall(t, h, "/auth/reset-password", reset), http.StatusTooManyRequests, "rate_limited")
+}
+
+func TestForgotPasswordPerEmailRateLimit(t *testing.T) {
+	limiter, err := ratelimit.NewMemory(ratelimit.Config{Burst: 1, Interval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubAccounts{}
+	h := api.New(api.Deps{
+		Accounts:     stub,
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		EmailLimiter: limiter,
+	})
+
+	if rec := authCall(t, h, "/auth/forgot-password", `{"email":"anna@example.com"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("first forgot = %d", rec.Code)
+	}
+	wantError(t, authCall(t, h, "/auth/forgot-password", `{"email":"ANNA@example.com"}`), http.StatusTooManyRequests, "rate_limited")
+	// Another address has its own bucket.
+	if rec := authCall(t, h, "/auth/forgot-password", `{"email":"bob@example.com"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("other email = %d", rec.Code)
+	}
+	// The scope separates resend from forgot.
+	if rec := authCall(t, h, "/auth/resend-verification", `{"email":"anna@example.com"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("resend = %d", rec.Code)
+	}
+	wantError(t, authCall(t, h, "/auth/resend-verification", `{"email":"anna@example.com"}`), http.StatusTooManyRequests, "rate_limited")
+	if len(stub.forgotEmails) != 2 || len(stub.resendEmails) != 1 {
+		t.Fatalf("calls: forgot=%v resend=%v", stub.forgotEmails, stub.resendEmails)
+	}
+}

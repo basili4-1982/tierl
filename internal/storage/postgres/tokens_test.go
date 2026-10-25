@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -146,17 +147,72 @@ func TestTokenConcurrentConsume(t *testing.T) {
 func TestTokenIssueUnknownUser(t *testing.T) {
 	s := newTokenStore(t)
 	err := s.Issue(context.Background(), oneTimeToken("t1", "ghost", auth.PurposeVerifyEmail, "raw", t0, auth.VerifyEmailTTL))
-	if err == nil {
-		t.Fatal("a token without a user must be rejected by the foreign key")
+	if !errors.Is(err, auth.ErrUserNotFound) {
+		t.Fatalf("want ErrUserNotFound, got %v", err)
 	}
 }
 
-func TestSessionRevokerWithoutSessionsTable(t *testing.T) {
-	// The sessions module is not part of this branch: the revoker must not make
-	// a password reset fail when there is nothing to revoke.
+func TestTokenConcurrentIssueLeavesOneActive(t *testing.T) {
 	_, pool := newStore(t)
-	n, err := postgres.NewSessionRevoker(pool).LogoutAll(context.Background(), "u1")
-	if err != nil || n != 0 {
-		t.Fatalf("LogoutAll = %d, %v", n, err)
+	ctx := context.Background()
+	if err := postgres.NewUserStore(pool).Create(ctx, user("u1", "anna@example.com")); err != nil {
+		t.Fatal(err)
+	}
+	s := postgres.NewTokenStore(pool)
+	const n = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- s.Issue(ctx, oneTimeToken(
+				fmt.Sprintf("t%d", i), "u1", auth.PurposeVerifyEmail,
+				fmt.Sprintf("raw-%d", i), t0, auth.VerifyEmailTTL))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent issue: %v", err)
+		}
+	}
+	var active, total int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE used_at IS NULL), count(*) FROM one_time_tokens
+		WHERE user_id = 'u1' AND purpose = 'verify_email'`).Scan(&active, &total); err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 || total != n {
+		t.Fatalf("active=%d total=%d, want 1 and %d", active, total, n)
+	}
+}
+
+func TestTokenStorePropagatesDatabaseErrors(t *testing.T) {
+	s := newTokenStore(t)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := s.Issue(canceled, oneTimeToken("t1", "u1", auth.PurposeVerifyEmail, "raw", t0, auth.VerifyEmailTTL)); err == nil {
+		t.Error("Issue with a canceled context must fail")
+	}
+	if _, err := s.Consume(canceled, tokenHash("raw"), auth.PurposeVerifyEmail, t0); err == nil {
+		t.Error("Consume with a canceled context must fail")
+	}
+	if err := s.Invalidate(canceled, "u1", auth.PurposeVerifyEmail, t0); err == nil {
+		t.Error("Invalidate with a canceled context must fail")
+	}
+}
+
+func TestTokenDuplicateHashIsRejected(t *testing.T) {
+	s := newTokenStore(t)
+	ctx := context.Background()
+	if err := s.Issue(ctx, oneTimeToken("t1", "u1", auth.PurposeVerifyEmail, "dup", t0, auth.VerifyEmailTTL)); err != nil {
+		t.Fatal(err)
+	}
+	// The raw hash is globally unique even though the previous token is now used.
+	if err := s.Issue(ctx, oneTimeToken("t2", "u1", auth.PurposeVerifyEmail, "dup", t0.Add(time.Minute), auth.VerifyEmailTTL)); err == nil {
+		t.Fatal("a duplicated token hash must violate the unique index")
 	}
 }

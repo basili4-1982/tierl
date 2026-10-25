@@ -298,3 +298,243 @@ func serveSMTP(ln net.Listener, mu *sync.Mutex, got *bytes.Buffer) {
 		}
 	}
 }
+
+// smtpScript configures the replies of serveScript. Empty values use a
+// permissive default.
+type smtpScript struct {
+	greeting string
+	ehlo     string
+	mail     string
+	rcpt     string
+	data     string
+	auth     string
+	starttls string
+}
+
+func scriptValue(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+// serveScript answers one SMTP session with the configured replies.
+func serveScript(ln net.Listener, script smtpScript, mu *sync.Mutex, got *bytes.Buffer) {
+	conn, err := ln.Accept()
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	r := bufio.NewReader(conn)
+	w := bufio.NewWriter(conn)
+	reply := func(s string) {
+		_, _ = w.WriteString(s + "\r\n")
+		_ = w.Flush()
+	}
+	record := func(s string) {
+		mu.Lock()
+		_, _ = got.WriteString(s + "\n")
+		mu.Unlock()
+	}
+	reply(scriptValue(script.greeting, "220 localhost ESMTP"))
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		cmd := strings.ToUpper(strings.TrimSpace(line))
+		switch {
+		case strings.HasPrefix(cmd, "EHLO"), strings.HasPrefix(cmd, "HELO"):
+			reply(scriptValue(script.ehlo, "250 localhost"))
+		case strings.HasPrefix(cmd, "AUTH "):
+			record(strings.TrimSpace(line))
+			reply(scriptValue(script.auth, "235 authenticated"))
+		case strings.HasPrefix(cmd, "MAIL FROM:"):
+			record(strings.TrimSpace(line))
+			reply(scriptValue(script.mail, "250 OK"))
+		case strings.HasPrefix(cmd, "RCPT TO:"):
+			record(strings.TrimSpace(line))
+			reply(scriptValue(script.rcpt, "250 OK"))
+		case cmd == "STARTTLS":
+			record(strings.TrimSpace(line))
+			reply(scriptValue(script.starttls, "220 go ahead"))
+		case cmd == "DATA":
+			dataReply := scriptValue(script.data, "354 go ahead")
+			reply(dataReply)
+			if !strings.HasPrefix(dataReply, "354") {
+				continue
+			}
+			var data bytes.Buffer
+			for {
+				l, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if l == ".\r\n" {
+					break
+				}
+				data.WriteString(l)
+			}
+			mu.Lock()
+			got.Write(data.Bytes())
+			mu.Unlock()
+			reply("250 queued")
+		case cmd == "QUIT":
+			reply("221 bye")
+			return
+		default:
+			reply("250 OK")
+		}
+	}
+}
+
+func sendToScript(t *testing.T, script smtpScript, cfg Config) (string, error) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	var (
+		mu  sync.Mutex
+		got bytes.Buffer
+	)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveScript(ln, script, &mu, &got)
+	}()
+
+	host, portText, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	cfg.Host = host
+	cfg.Port = port
+	if cfg.From == "" {
+		cfg.From = "Tierl <no-reply@tierl.local>"
+	}
+	s, err := NewSMTP(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendErr := s.Send(context.Background(), Message{To: "anna@example.com", Subject: "s", Text: "body"})
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scripted smtp server did not finish")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return got.String(), sendErr
+}
+
+func TestSMTPRequiresSTARTTLS(t *testing.T) {
+	commands, sendErr := sendToScript(t, smtpScript{}, Config{TLS: true})
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "STARTTLS") {
+		t.Fatalf("send = %v, want a STARTTLS error", sendErr)
+	}
+	if strings.Contains(commands, "MAIL FROM") || strings.Contains(commands, "RCPT TO") {
+		t.Fatalf("nothing may be sent in plaintext: %s", commands)
+	}
+}
+
+func TestSMTPStageErrors(t *testing.T) {
+	tests := map[string]struct {
+		script smtpScript
+		cfg    Config
+		want   string
+	}{
+		"greeting rejected":  {script: smtpScript{greeting: "554 go away"}, want: "handshake"},
+		"mail from rejected": {script: smtpScript{mail: "550 sender rejected"}, want: "MAIL FROM"},
+		"rcpt rejected":      {script: smtpScript{rcpt: "550 no such user"}, want: "RCPT TO"},
+		"data rejected":      {script: smtpScript{data: "554 message rejected"}, want: "DATA"},
+		"auth rejected": {
+			script: smtpScript{ehlo: "250-localhost\r\n250 AUTH PLAIN", auth: "535 bad credentials"},
+			cfg:    Config{Username: "u", Password: "p"},
+			want:   "auth",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, sendErr := sendToScript(t, tt.script, tt.cfg)
+			if sendErr == nil || !strings.Contains(sendErr.Error(), tt.want) {
+				t.Fatalf("send = %v, want %q", sendErr, tt.want)
+			}
+		})
+	}
+}
+
+func TestSMTPDialError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portText, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	_ = ln.Close() // the port is now closed
+
+	s, err := NewSMTP(Config{Host: host, Port: port, From: "x@y.z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(context.Background(), Message{To: "a@b.c", Subject: "s", Text: "t"}); err == nil {
+		t.Fatal("expected a dial error")
+	}
+}
+
+func TestSMTPStartTLSError(t *testing.T) {
+	commands, sendErr := sendToScript(t, smtpScript{
+		ehlo:     "250-localhost\r\n250 STARTTLS",
+		starttls: "454 TLS not available",
+	}, Config{TLS: true})
+	if sendErr == nil || !strings.Contains(sendErr.Error(), "starttls") {
+		t.Fatalf("send = %v, want a starttls error", sendErr)
+	}
+	if strings.Contains(commands, "MAIL FROM") {
+		t.Fatalf("message must not be sent after a failed STARTTLS: %s", commands)
+	}
+}
+
+func TestSMTPPlainAuthIsSkippedWithoutAuthExtension(t *testing.T) {
+	commands, sendErr := sendToScript(t, smtpScript{ehlo: "250 localhost"}, Config{Username: "u", Password: "p"})
+	if sendErr != nil {
+		t.Fatalf("send: %v", sendErr)
+	}
+	if strings.Contains(commands, "AUTH") {
+		t.Fatalf("AUTH must not be attempted when the server does not offer it: %s", commands)
+	}
+	if !strings.Contains(commands, "MAIL FROM") {
+		t.Fatal("message was not sent")
+	}
+}
+
+func TestSMTPExpiredContext(t *testing.T) {
+	s, err := NewSMTP(Config{Host: "127.0.0.1", Port: 25, From: "x@y.z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := s.Send(ctx, Message{To: "a@b.c", Subject: "s", Text: "t"}); err == nil {
+		t.Fatal("expected a deadline error")
+	}
+}
+
+func TestNewSMTPInvalidHost(t *testing.T) {
+	if _, err := NewSMTP(Config{Host: "bad host", Port: 25, From: "x@y.z"}); err == nil {
+		t.Fatal("a host with a space must be rejected")
+	}
+	if _, err := NewSMTP(Config{Host: "smtp.example", Port: 70000, From: "x@y.z"}); err == nil {
+		t.Fatal("an out-of-range port must be rejected")
+	}
+}
+
+func TestLogSenderWithNilLogger(t *testing.T) {
+	var s LogSender
+	msg, err := Render(LangEN, VerifyEmail, Data{Name: "Ann", URL: "https://x", TTL: "1 hour"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(context.Background(), msg); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+}

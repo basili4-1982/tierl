@@ -149,10 +149,11 @@ func TestAPIFlowOnRealDatabase(t *testing.T) {
 		"anna": {DisplayName: "Anna", EmailVerified: true},
 		"bob":  {DisplayName: "Bob", EmailVerified: true},
 	}
-	deps, err := newDeps(pool, testConfig(url), discardLog(), headerAuth{}, users)
+	deps, closeMail, err := newDeps(pool, testConfig(url), discardLog(), headerAuth{}, users)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer closeMail()
 	h := web.NewHandler(deps)
 	const p = "/api/v1/tierlists"
 

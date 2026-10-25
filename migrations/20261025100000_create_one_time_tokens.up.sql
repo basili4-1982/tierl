@@ -21,7 +21,8 @@ CREATE TABLE one_time_tokens (
     )
 );
 
--- Finding and invalidating the active token of one user and purpose.
-CREATE INDEX one_time_tokens_user_purpose_idx ON one_time_tokens (user_id, purpose) WHERE used_at IS NULL;
+-- At most one active token per user and purpose: a concurrent reissue cannot
+-- leave two working links. The index also serves lookups by user and purpose.
+CREATE UNIQUE INDEX one_time_tokens_active_key ON one_time_tokens (user_id, purpose) WHERE used_at IS NULL;
 -- Removing dead rows.
 CREATE INDEX one_time_tokens_expires_at_idx ON one_time_tokens (expires_at);
