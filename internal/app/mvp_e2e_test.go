@@ -286,6 +286,18 @@ func TestMVPResubmissionContract(t *testing.T) {
 			t.Fatalf("item %s tier = %d, want 1", itemID, got)
 		}
 	}
+
+	// Replacement must move the counters too: the old tier loses one and the
+	// new tier gains one, keeping exactly one answer worth of placements.
+	distributions, err := f.store.Distributions(f.ctx, listID)
+	if err != nil || len(distributions) != len(items) {
+		t.Fatalf("distributions after resubmission: %v, len=%d", err, len(distributions))
+	}
+	for _, distribution := range distributions {
+		if len(distribution.Counts) != len(tiers) || distribution.Counts[0] != 0 || distribution.Counts[1] != 1 {
+			t.Fatalf("distribution %s after resubmission = %v", distribution.ItemID, distribution.Counts)
+		}
+	}
 }
 
 func TestMVPUnlistedNotInCatalog(t *testing.T) {
