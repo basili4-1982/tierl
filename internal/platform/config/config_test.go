@@ -118,6 +118,70 @@ func TestLoad_Argon2(t *testing.T) {
 	}
 }
 
+func TestLoad_SessionAndAuthDefaults(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionTTL != 720*time.Hour || cfg.SessionMaxAge != 2160*time.Hour {
+		t.Errorf("session lifetimes = %v / %v", cfg.SessionTTL, cfg.SessionMaxAge)
+	}
+	if !cfg.CookieSecure || cfg.PublicBaseURL != "http://localhost:8080" || cfg.CSRFKey != "" {
+		t.Errorf("cookie/csrf defaults = %+v", cfg)
+	}
+	if cfg.AuthBurst != 10 || cfg.AuthInterval != 30*time.Second {
+		t.Errorf("auth limits = %d / %v", cfg.AuthBurst, cfg.AuthInterval)
+	}
+}
+
+func TestLoad_SessionAndAuthOverrides(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"TIERL_DATABASE_URL":            "postgres://x",
+		"TIERL_IP_HASH_SALT":            "salt",
+		"TIERL_SESSION_TTL":             "2h",
+		"TIERL_SESSION_MAX_AGE":         "48h",
+		"TIERL_COOKIE_SECURE":           "false",
+		"TIERL_PUBLIC_BASE_URL":         "https://tierl.example",
+		"TIERL_CSRF_KEY":                "0123456789abcdef",
+		"TIERL_RATELIMIT_AUTH_BURST":    "4",
+		"TIERL_RATELIMIT_AUTH_INTERVAL": "15s",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionTTL != 2*time.Hour || cfg.SessionMaxAge != 48*time.Hour || cfg.CookieSecure {
+		t.Errorf("session = %+v", cfg)
+	}
+	if cfg.PublicBaseURL != "https://tierl.example" || cfg.CSRFKey != "0123456789abcdef" {
+		t.Errorf("url/csrf = %+v", cfg)
+	}
+	if cfg.AuthBurst != 4 || cfg.AuthInterval != 15*time.Second {
+		t.Errorf("auth limits = %d / %v", cfg.AuthBurst, cfg.AuthInterval)
+	}
+}
+
+func TestLoad_SessionAndAuthInvalid(t *testing.T) {
+	tests := map[string]map[string]string{
+		"bad session ttl":    {"TIERL_SESSION_TTL": "soon"},
+		"zero session ttl":   {"TIERL_SESSION_TTL": "0s"},
+		"bad max age":        {"TIERL_SESSION_MAX_AGE": "soon"},
+		"max age below ttl":  {"TIERL_SESSION_TTL": "2h", "TIERL_SESSION_MAX_AGE": "1h"},
+		"bad cookie secure":  {"TIERL_COOKIE_SECURE": "maybe"},
+		"short csrf key":     {"TIERL_CSRF_KEY": "short"},
+		"bad auth burst":     {"TIERL_RATELIMIT_AUTH_BURST": "many"},
+		"zero auth burst":    {"TIERL_RATELIMIT_AUTH_BURST": "0"},
+		"bad auth interval":  {"TIERL_RATELIMIT_AUTH_INTERVAL": "soon"},
+		"zero auth interval": {"TIERL_RATELIMIT_AUTH_INTERVAL": "0s"},
+	}
+	for name, vars := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(env(vars)); err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
 func TestLoad_Storage(t *testing.T) {
 	cfg, err := Load(env(nil))
 	if err != nil {

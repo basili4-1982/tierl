@@ -53,13 +53,39 @@ func newEnv(t *testing.T, limit api.Middleware) env {
 
 func (e env) do(t *testing.T, method, path, user, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	return e.doWith(t, method, path, user, body, true)
+}
+
+// doWith sends a request; withCSRF=false omits the X-CSRF-Token header.
+func (e env) doWith(t *testing.T, method, path, user, body string, withCSRF bool) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(method, api.Prefix+path, strings.NewReader(body))
 	if user != "" {
 		req.Header.Set("X-Test-User", user)
 	}
+	if withCSRF && method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		req.Header.Set(api.CSRFHeader, e.csrfToken(t))
+	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	return rec
+}
+
+// csrfToken fetches a guest CSRF token from GET /csrf.
+func (e env) csrfToken(t *testing.T) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.Prefix+"/csrf", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /csrf = %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Token string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Token == "" {
+		t.Fatalf("csrf body %q: %v", rec.Body.String(), err)
+	}
+	return body.Token
 }
 
 const createBody = `{
@@ -344,6 +370,21 @@ func TestStatusInvalidTransition(t *testing.T) {
 	e.store.Put(*tl)
 	wantError(t, e.do(t, http.MethodGet, "/tierlists/langs", "anna", ""), 404, "not_found")
 	wantError(t, e.do(t, http.MethodPost, "/tierlists/langs/close", "anna", ""), 404, "not_found")
+}
+
+func TestCSRFRequired(t *testing.T) {
+	e := newEnv(t, nil)
+	// Creation by an authenticated user still needs the token.
+	wantError(t, e.doWith(t, http.MethodPost, "/tierlists", "anna", createBody, false), 403, "csrf_failed")
+	req := httptest.NewRequest(http.MethodPost, api.Prefix+"/tierlists", strings.NewReader(createBody))
+	req.Header.Set("X-Test-User", "anna")
+	req.Header.Set(api.CSRFHeader, "foreign-or-garbage-token")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	wantError(t, rec, 403, "csrf_failed")
+
+	// A guest is rejected by authentication before CSRF, as the contract says.
+	wantError(t, e.doWith(t, http.MethodPost, "/tierlists", "", createBody, false), 401, "unauthorized")
 }
 
 func TestUnknownRoute(t *testing.T) {

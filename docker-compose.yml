@@ -9,6 +9,9 @@ services:
       TIERL_MIGRATE_ON_START: "true"
       # Dev-only salt; use a random secret outside local development.
       TIERL_IP_HASH_SALT: "dev-only-ip-hash-salt-change-me"
+      # Local development is served over plain HTTP.
+      TIERL_COOKIE_SECURE: "false"
+      TIERL_PUBLIC_BASE_URL: "http://localhost:8080"
     depends_on:
       postgres:
         condition: service_healthy

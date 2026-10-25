@@ -16,6 +16,12 @@ var (
 	ErrInvalidCredentials = errors.New("auth: invalid credentials")
 	// ErrUserNotFound is returned when a user does not exist.
 	ErrUserNotFound = errors.New("auth: user not found")
+	// ErrSessionNotFound is returned for unknown, expired and revoked sessions;
+	// the caller cannot tell those cases apart.
+	ErrSessionNotFound = errors.New("auth: session not found")
+	// ErrInvalidToken is returned for unknown, expired and already used one-time
+	// tokens (password reset, email verification).
+	ErrInvalidToken = errors.New("auth: invalid or expired token")
 	// ErrInvalidHash is returned when a stored hash is not a supported PHC argon2id string.
 	ErrInvalidHash = errors.New("auth: invalid password hash")
 	// ErrRandom is returned when the random source fails.

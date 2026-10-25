@@ -32,7 +32,7 @@ export interface paths {
         put?: never;
         /**
          * Регистрация
-         * @description Создаёт пользователя и отправляет письмо с ссылкой подтверждения email.
+         * @description Создаёт пользователя, открывает сессию и отправляет письмо с ссылкой подтверждения email. Публичный эндпоинт: авторизация и CSRF-токен не требуются.
          */
         post: operations["register"];
         delete?: never;
@@ -50,7 +50,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Подтверждение email по токену из письма */
+        /**
+         * Подтверждение email по токену из письма
+         * @description До подключения почты (TIERL-2) эндпоинт отвечает 400 invalid_token на любой токен; контракт ответов уже финальный.
+         */
         post: operations["verifyEmail"];
         delete?: never;
         options?: never;
@@ -67,7 +70,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Вход */
+        /**
+         * Вход
+         * @description Публичный эндпоинт; CSRF-токен не требуется.
+         */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -436,6 +442,8 @@ export interface components {
             email_verified: boolean;
             /** Format: date-time */
             created_at: string;
+            /** @description CSRF-токен сессии. Присутствует в ответах register, login и me; тот же токен выдаёт `GET /csrf`. */
+            csrf_token?: string;
         };
         RegisterRequest: {
             /** Format: email */
@@ -717,7 +725,7 @@ export interface components {
     };
     requestBodies: never;
     headers: {
-        /** @description `tierl_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/` */
+        /** @description `tierl_session=<token>; Path=/; HttpOnly; SameSite=Lax; Secure` (Secure отключается конфигом в локальной разработке) */
         SetSessionCookie: string;
         /** @description `tierl_anon=<token>; HttpOnly; Secure; SameSite=Lax; Path=/` (если ещё не выдана) */
         SetAnonCookie: string;
@@ -785,14 +793,14 @@ export interface operations {
                      *       "email": "anna@example.com",
                      *       "display_name": "Anna",
                      *       "email_verified": false,
-                     *       "created_at": "2026-10-22T09:00:00Z"
+                     *       "created_at": "2026-10-22T09:00:00Z",
+                     *       "csrf_token": "c3Jm...Zg"
                      *     }
                      */
                     "application/json": components["schemas"]["User"];
                 };
             };
             400: components["responses"]["BadRequest"];
-            403: components["responses"]["Forbidden"];
             /** @description Email уже занят. */
             409: {
                 headers: {
@@ -888,7 +896,8 @@ export interface operations {
                      *       "email": "anna@example.com",
                      *       "display_name": "Anna",
                      *       "email_verified": true,
-                     *       "created_at": "2026-10-22T09:00:00Z"
+                     *       "created_at": "2026-10-22T09:00:00Z",
+                     *       "csrf_token": "c3Jm...Zg"
                      *     }
                      */
                     "application/json": components["schemas"]["User"];
@@ -910,7 +919,6 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -1051,7 +1059,8 @@ export interface operations {
                      *       "email": "anna@example.com",
                      *       "display_name": "Anna",
                      *       "email_verified": true,
-                     *       "created_at": "2026-10-22T09:00:00Z"
+                     *       "created_at": "2026-10-22T09:00:00Z",
+                     *       "csrf_token": "c3Jm...Zg"
                      *     }
                      */
                     "application/json": components["schemas"]["User"];
@@ -1095,6 +1104,9 @@ export interface operations {
                  *         {
                  *           "label": "Rust",
                  *           "image_url": "https://cdn.example.com/img/rust.png"
+                 *         },
+                 *         {
+                 *           "label": "Zig"
                  *         }
                  *       ]
                  *     }
@@ -1282,6 +1294,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000002"
                  *         }
                  *       ]
                  *     }
@@ -1362,6 +1378,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000001"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
                  *         }
                  *       ]
                  *     }

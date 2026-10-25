@@ -18,6 +18,14 @@ const (
 	defaultCreateTierlistBurst    = 10
 	defaultCreateTierlistInterval = 30 * time.Second
 
+	defaultSessionTTL    = 30 * 24 * time.Hour
+	defaultSessionMaxAge = 90 * 24 * time.Hour
+
+	defaultAuthBurst    = 10
+	defaultAuthInterval = 30 * time.Second
+
+	defaultPublicBaseURL = "http://localhost:8080"
+
 	defaultStorageFSPath = "./data/media"
 	defaultStoragePublic = "/media"
 )
@@ -44,6 +52,26 @@ type Config struct {
 	// CreateTierlistInterval is the refill time of one creation token
 	// (TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL, default 30s).
 	CreateTierlistInterval time.Duration
+
+	// SessionTTL is the sliding idle lifetime of a session (TIERL_SESSION_TTL,
+	// default 720h). SessionMaxAge is the absolute ceiling (TIERL_SESSION_MAX_AGE,
+	// default 2160h); sliding renewal does not extend a session past it.
+	SessionTTL    time.Duration
+	SessionMaxAge time.Duration
+	// CookieSecure sets the Secure attribute of the session cookie
+	// (TIERL_COOKIE_SECURE, default true). Local HTTP development sets false.
+	CookieSecure bool
+	// PublicBaseURL is the origin used in emailed links (TIERL_PUBLIC_BASE_URL).
+	PublicBaseURL string
+	// CSRFKey signs guest CSRF tokens (TIERL_CSRF_KEY, at least 16 characters).
+	// When empty, a key is derived from IPHashSalt.
+	CSRFKey string
+
+	// AuthBurst and AuthInterval limit login, registration and password reset
+	// per IP and per email (TIERL_RATELIMIT_AUTH_BURST, default 10;
+	// TIERL_RATELIMIT_AUTH_INTERVAL, default 30s).
+	AuthBurst    int
+	AuthInterval time.Duration
 
 	Storage StorageConfig
 }
@@ -85,6 +113,15 @@ func Load(getenv func(string) string) (Config, error) {
 		IPHashSalt:             getenv("TIERL_IP_HASH_SALT"),
 		CreateTierlistBurst:    defaultCreateTierlistBurst,
 		CreateTierlistInterval: defaultCreateTierlistInterval,
+
+		SessionTTL:    defaultSessionTTL,
+		SessionMaxAge: defaultSessionMaxAge,
+		CookieSecure:  true,
+		PublicBaseURL: valueOr(getenv("TIERL_PUBLIC_BASE_URL"), defaultPublicBaseURL),
+		CSRFKey:       strings.TrimSpace(getenv("TIERL_CSRF_KEY")),
+
+		AuthBurst:    defaultAuthBurst,
+		AuthInterval: defaultAuthInterval,
 	}
 
 	for _, v := range []struct {
@@ -126,6 +163,61 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL: must be positive")
 		}
 		cfg.CreateTierlistInterval = d
+	}
+
+	if raw := strings.TrimSpace(getenv("TIERL_SESSION_TTL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_SESSION_TTL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_SESSION_TTL: must be positive")
+		}
+		cfg.SessionTTL = d
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SESSION_MAX_AGE")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_SESSION_MAX_AGE: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_SESSION_MAX_AGE: must be positive")
+		}
+		cfg.SessionMaxAge = d
+	}
+	if cfg.SessionMaxAge < cfg.SessionTTL {
+		return Config{}, errors.New("TIERL_SESSION_MAX_AGE: must not be shorter than TIERL_SESSION_TTL")
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_COOKIE_SECURE")); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_COOKIE_SECURE: %w", err)
+		}
+		cfg.CookieSecure = b
+	}
+	if cfg.CSRFKey != "" && len(cfg.CSRFKey) < 16 {
+		return Config{}, errors.New("TIERL_CSRF_KEY: must be at least 16 characters")
+	}
+
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_AUTH_BURST")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_AUTH_BURST: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_AUTH_BURST: must be positive")
+		}
+		cfg.AuthBurst = n
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_AUTH_INTERVAL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_AUTH_INTERVAL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_AUTH_INTERVAL: must be positive")
+		}
+		cfg.AuthInterval = d
 	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {

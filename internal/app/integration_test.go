@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -18,6 +19,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/basili4-1982/tierl/internal/auth"
+	"github.com/basili4-1982/tierl/internal/auth/authtest"
 	"github.com/basili4-1982/tierl/internal/platform/config"
 	"github.com/basili4-1982/tierl/internal/storage/postgres"
 	"github.com/basili4-1982/tierl/internal/tierlist"
@@ -104,6 +107,13 @@ func testConfig(url string) config.Config {
 		IPHashSalt:             "test-salt",
 		CreateTierlistBurst:    3,
 		CreateTierlistInterval: time.Hour,
+		Argon2MemoryKiB:        64,
+		Argon2Iterations:       1,
+		Argon2Parallelism:      1,
+		AuthBurst:              1000,
+		AuthInterval:           time.Hour,
+		CookieSecure:           false,
+		PublicBaseURL:          "http://localhost:8080",
 		ShutdownTimeout:        time.Second,
 	}
 }
@@ -127,6 +137,9 @@ func call(t *testing.T, h http.Handler, method, path, user, payload string) (int
 	if user != "" {
 		req.Header.Set("X-Test-User", user)
 	}
+	if method != http.MethodGet {
+		req.Header.Set("X-CSRF-Token", csrfToken(t, h))
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var m map[string]any
@@ -134,6 +147,24 @@ func call(t *testing.T, h http.Handler, method, path, user, payload string) (int
 		_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	}
 	return rec.Code, m
+}
+
+// csrfToken fetches a guest CSRF token; it is accepted with and without a
+// session, so the helper also works for the header-authenticated test user.
+func csrfToken(t *testing.T, h http.Handler) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /csrf = %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Token string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Token == "" {
+		t.Fatalf("csrf body %q: %v", rec.Body.String(), err)
+	}
+	return body.Token
 }
 
 func TestAPIFlowOnRealDatabase(t *testing.T) {
@@ -149,7 +180,7 @@ func TestAPIFlowOnRealDatabase(t *testing.T) {
 		"anna": {DisplayName: "Anna", EmailVerified: true},
 		"bob":  {DisplayName: "Bob", EmailVerified: true},
 	}
-	deps, err := newDeps(pool, testConfig(url), discardLog(), headerAuth{}, users)
+	deps, err := newDeps(pool, testConfig(url), discardLog(), headerAuth{}, users, services{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,12 +370,119 @@ func TestSetup_Errors(t *testing.T) {
 	})
 }
 
-func TestPlaceholders(t *testing.T) {
-	if id, ok := (guestAuth{}).UserID(httptest.NewRequest(http.MethodGet, "/", nil)); ok || id != "" {
-		t.Errorf("guestAuth = %q, %v", id, ok)
+func TestSetup_SessionAuthAndUserDirectory(t *testing.T) {
+	url := testDB(t)
+	cfg := testConfig(url)
+	cfg.MigrateOnStart = true
+	ctx := context.Background()
+
+	deps, closeFn, err := setup(ctx, cfg, discardLog())
+	if err != nil {
+		t.Fatalf("setup: %v", err)
 	}
-	if _, err := (noUsers{}).Profile(context.Background(), "x"); err == nil {
-		t.Error("noUsers must not know anybody")
+	defer closeFn()
+	h := web.NewHandler(deps)
+
+	// Registration is public and opens a session (201 + cookie + csrf token).
+	rec := doReq(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"email":"anna@example.com","password":"correct-horse-battery","display_name":"Anna"}`, "", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register = %d %s", rec.Code, rec.Body.String())
 	}
-	_ = tierlist.ErrNotFound
+	var user map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	csrf, _ := user["csrf_token"].(string)
+	if csrf == "" || user["email"] != "anna@example.com" || user["email_verified"] != false {
+		t.Fatalf("register body = %v", user)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != auth.SessionCookieName || !cookies[0].HttpOnly ||
+		cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("session cookie = %+v", cookies)
+	}
+	session := cookies[0]
+
+	rec = doReq(t, h, http.MethodGet, "/api/v1/auth/me", "", "", session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The session authenticator replaces guestAuth: an unverified author is
+	// recognised (403 email_not_verified, not 401).
+	rec = doReq(t, h, http.MethodPost, "/api/v1/tierlists", body, csrf, session)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "email_not_verified") {
+		t.Fatalf("create unverified = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The real user directory feeds tierlist: after confirmation creation works.
+	pool, err := postgres.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE users SET email_verified = true WHERE email = 'anna@example.com'`); err != nil {
+		t.Fatal(err)
+	}
+	rec = doReq(t, h, http.MethodPost, "/api/v1/tierlists", body, csrf, session)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create verified = %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A guest still gets 401, so the placeholder authenticator is really gone.
+	if code, m := call(t, h, http.MethodPost, "/api/v1/tierlists", "", body); code != http.StatusUnauthorized || m["code"] != "unauthorized" {
+		t.Fatalf("guest create = %d %v", code, m)
+	}
+
+	// Logout needs the session-bound CSRF token and revokes the session.
+	if rec := doReq(t, h, http.MethodPost, "/api/v1/auth/logout", "", "", session); rec.Code != http.StatusForbidden {
+		t.Fatalf("logout without csrf = %d", rec.Code)
+	}
+	if rec := doReq(t, h, http.MethodPost, "/api/v1/auth/logout", "", csrf, session); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReq(t, h, http.MethodGet, "/api/v1/auth/me", "", "", session); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("me after logout = %d", rec.Code)
+	}
+}
+
+// doReq sends a request with an optional CSRF token and cookies.
+func doReq(t *testing.T, h http.Handler, method, path, payload, csrf string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(payload))
+	req.RemoteAddr = "203.0.113.10:5000"
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
+	for _, c := range cookies {
+		if c != nil {
+			req.AddCookie(c)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestUserDirectory(t *testing.T) {
+	users := authtest.NewUsers()
+	svc, err := auth.NewService(users, auth.Options{Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.Register(context.Background(), auth.RegisterInput{
+		Email: "anna@example.com", Password: "correct-horse-battery", DisplayName: "Anna",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := userDirectory{auth: svc}
+	profile, err := d.Profile(context.Background(), u.ID)
+	if err != nil || profile.DisplayName != "Anna" || profile.EmailVerified {
+		t.Fatalf("profile = %+v, %v", profile, err)
+	}
+	if _, err := d.Profile(context.Background(), "missing"); !errors.Is(err, tierlist.ErrNotFound) {
+		t.Fatalf("missing user = %v, want tierlist.ErrNotFound", err)
+	}
 }

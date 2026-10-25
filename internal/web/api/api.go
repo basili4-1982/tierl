@@ -1,16 +1,19 @@
 // Package api implements the JSON HTTP API described in api/openapi.yaml.
 // Handlers only translate HTTP to service calls and back: business rules live
-// in internal/tierlist and there is no SQL here.
+// in internal/tierlist and internal/auth and there is no SQL here.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
+	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/domain"
+	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
 
@@ -26,6 +29,31 @@ type Authenticator interface {
 	UserID(r *http.Request) (string, bool)
 }
 
+// SessionAuthenticator resolves the tierl_session cookie to a user. It
+// implements Authenticator on top of the server-side sessions (ADR-003).
+type SessionAuthenticator struct {
+	Sessions *auth.SessionService
+}
+
+var _ Authenticator = SessionAuthenticator{}
+
+// UserID implements Authenticator. Unknown, expired and revoked sessions look
+// like a guest request.
+func (s SessionAuthenticator) UserID(r *http.Request) (string, bool) {
+	if s.Sessions == nil {
+		return "", false
+	}
+	cookie, err := r.Cookie(auth.SessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", false
+	}
+	sess, err := s.Sessions.Authenticate(r.Context(), cookie.Value)
+	if err != nil {
+		return "", false
+	}
+	return sess.UserID, true
+}
+
 // Middleware wraps a handler, for example with a rate limiter.
 type Middleware func(http.Handler) http.Handler
 
@@ -36,32 +64,96 @@ type Deps struct {
 	Log       *slog.Logger
 	// CreateTierlistLimit wraps POST /tierlists; nil means no extra middleware.
 	CreateTierlistLimit Middleware
+
+	// AuthService serves the auth endpoints. When any of AuthService, Sessions
+	// or Resets is nil the /auth routes are not registered (static-only and
+	// integration setups); GET /csrf keeps working.
+	AuthService *auth.Service
+	Sessions    *auth.SessionService
+	Resets      *auth.PasswordResetService
+	// AuthLimit is the per-email limiter of login, registration and
+	// forgot-password (reset-password has no email in the body and is limited
+	// per IP by AuthLimitMiddleware).
+	AuthLimit           ratelimit.Limiter
+	AuthLimitMiddleware Middleware
+	// CSRF issues and verifies tokens; nil builds a guest-only service.
+	CSRF *CSRF
+	// SecureCookies sets the Secure attribute of the session cookie. It is
+	// true in production and false for local HTTP development.
+	SecureCookies bool
 }
 
 // API is the HTTP handler of the JSON API.
 type API struct {
-	tierlists *tierlist.Service
-	auth      Authenticator
-	log       *slog.Logger
-	mux       *http.ServeMux
+	tierlists     *tierlist.Service
+	auth          Authenticator
+	authSvc       *auth.Service
+	sessions      *auth.SessionService
+	resets        *auth.PasswordResetService
+	authLimit     ratelimit.Limiter
+	csrf          *CSRF
+	secureCookies bool
+	log           *slog.Logger
+	mux           *http.ServeMux
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	a := &API{tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux()}
+	if d.Auth == nil && d.Sessions != nil {
+		d.Auth = SessionAuthenticator{Sessions: d.Sessions}
+	}
+	if d.CSRF == nil {
+		d.CSRF = NewCSRF(d.Sessions, nil)
+	}
+	a := &API{
+		tierlists:     d.Tierlists,
+		auth:          d.Auth,
+		authSvc:       d.AuthService,
+		sessions:      d.Sessions,
+		resets:        d.Resets,
+		authLimit:     d.AuthLimit,
+		csrf:          d.CSRF,
+		secureCookies: d.SecureCookies,
+		log:           d.Log,
+		mux:           http.NewServeMux(),
+	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	a.mux.HandleFunc("GET "+Prefix+"/csrf", a.csrf.Handler())
+
 	create := http.Handler(http.HandlerFunc(a.createTierlist))
+	create = a.withUser(a.csrf.Middleware(create))
 	if d.CreateTierlistLimit != nil {
 		create = d.CreateTierlistLimit(create)
 	}
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
-	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
-	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
-	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+	a.mux.Handle("PATCH "+Prefix+"/tierlists/{slug}", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.updateTierlist))))
+	a.mux.Handle("DELETE "+Prefix+"/tierlists/{slug}", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.deleteTierlist))))
+	a.mux.Handle("POST "+Prefix+"/tierlists/{slug}/close", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.closeTierlist))))
+
+	if d.AuthService != nil && d.Sessions != nil && d.Resets != nil {
+		limited := func(h http.Handler) http.Handler {
+			if d.AuthLimitMiddleware == nil {
+				return h
+			}
+			return d.AuthLimitMiddleware(h)
+		}
+		// Login and registration are public and exempt from CSRF (SPEC
+		// section 6): they do not act on an existing session and SameSite=Lax
+		// keeps a cross-site form from carrying one.
+		a.mux.Handle("POST "+Prefix+"/auth/register", limited(http.HandlerFunc(a.register)))
+		a.mux.Handle("POST "+Prefix+"/auth/login", limited(http.HandlerFunc(a.login)))
+		a.mux.Handle("POST "+Prefix+"/auth/logout", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.logout))))
+		a.mux.Handle("POST "+Prefix+"/auth/logout-all", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.logoutAll))))
+		a.mux.Handle("GET "+Prefix+"/auth/me", a.withUser(http.HandlerFunc(a.me)))
+		a.mux.Handle("POST "+Prefix+"/auth/verify-email", limited(a.csrf.Middleware(http.HandlerFunc(a.verifyEmail))))
+		a.mux.Handle("POST "+Prefix+"/auth/forgot-password", limited(a.csrf.Middleware(http.HandlerFunc(a.forgotPassword))))
+		a.mux.Handle("POST "+Prefix+"/auth/reset-password", limited(a.csrf.Middleware(http.HandlerFunc(a.resetPassword))))
+	}
+
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	})
@@ -89,8 +181,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// userIDKey carries the authenticated user ID from withUser to handlers.
+type userIDKey struct{}
+
+// withUser rejects a request without a signed-in user before any other check,
+// so an anonymous caller always gets 401 and not a CSRF failure.
+func (a *API) withUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := a.auth.UserID(r)
+		if !ok || id == "" {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется вход", nil)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, id)))
+	})
+}
+
 // requireUser returns the signed-in user or writes 401.
 func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if id, ok := r.Context().Value(userIDKey{}).(string); ok && id != "" {
+		return id, true
+	}
 	id, ok := a.auth.UserID(r)
 	if !ok || id == "" {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется вход", nil)
@@ -112,6 +223,19 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// allowByEmail applies the per-email rate limit and writes 429 when exhausted.
+func (a *API) allowByEmail(w http.ResponseWriter, _ *http.Request, scope, email string) bool {
+	if a.authLimit == nil {
+		return true
+	}
+	d := a.authLimit.Allow(ratelimit.EmailKey(scope, email))
+	if d.Allowed {
+		return true
+	}
+	ratelimit.WriteLimited(w, d.RetryAfter)
+	return false
 }
 
 // writeServiceError maps service and domain errors to HTTP responses.

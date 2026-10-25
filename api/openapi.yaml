@@ -8,12 +8,18 @@ info:
 
     ## Сессии и CSRF
     * Авторизация: серверная сессия, токен лежит в cookie `tierl_session`
-      (HttpOnly, Secure, SameSite=Lax).
+      (HttpOnly, SameSite=Lax; Secure, в локальной разработке по HTTP
+      отключается конфигом `TIERL_COOKIE_SECURE`). Срок жизни скользящий:
+      активность продлевает сессию, но не дальше абсолютного потолка.
     * Анонимный участник получает cookie `tierl_anon` (HttpOnly, Secure,
       SameSite=Lax) при первом ответе; по ней определяется "один ответ на
       сессию" и возможность перепройти опрос.
     * Все небезопасные методы (POST, PUT, PATCH, DELETE) требуют заголовок
-      `X-CSRF-Token`. Токен выдаёт `GET /csrf` (и он же возвращается в `GET /auth/me`).
+      `X-CSRF-Token`, кроме публичных `POST /auth/login` и `POST /auth/register`
+      (они не действуют на существующую сессию). Токен выдаёт `GET /csrf`;
+      для запроса с сессией он привязан к ней, гостю выдаётся подписанный
+      токен. Тот же токен возвращают `POST /auth/register`, `POST /auth/login`
+      и `GET /auth/me` в поле `csrf_token`.
       Без заголовка или с неверным токеном - `403 csrf_failed`.
 
     ## Ошибки
@@ -67,9 +73,11 @@ paths:
       tags: [auth]
       operationId: register
       summary: Регистрация
-      description: Создаёт пользователя и отправляет письмо с ссылкой подтверждения email.
-      security:
-        - csrfHeader: []
+      description: >-
+        Создаёт пользователя, открывает сессию и отправляет письмо с ссылкой
+        подтверждения email. Публичный эндпоинт: авторизация и CSRF-токен не
+        требуются.
+      security: []
       requestBody:
         required: true
         content:
@@ -90,8 +98,8 @@ paths:
                 display_name: Anna
                 email_verified: false
                 created_at: '2026-10-22T09:00:00Z'
+                csrf_token: c3Jm...Zg
         '400': { $ref: '#/components/responses/BadRequest' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: Email уже занят.
           content:
@@ -105,6 +113,9 @@ paths:
       tags: [auth]
       operationId: verifyEmail
       summary: Подтверждение email по токену из письма
+      description: >-
+        До подключения почты (TIERL-2) эндпоинт отвечает 400 invalid_token на
+        любой токен; контракт ответов уже финальный.
       security:
         - csrfHeader: []
       requestBody:
@@ -128,8 +139,8 @@ paths:
       tags: [auth]
       operationId: login
       summary: Вход
-      security:
-        - csrfHeader: []
+      description: Публичный эндпоинт; CSRF-токен не требуется.
+      security: []
       requestBody:
         required: true
         content:
@@ -150,6 +161,7 @@ paths:
                 display_name: Anna
                 email_verified: true
                 created_at: '2026-10-22T09:00:00Z'
+                csrf_token: c3Jm...Zg
         '400': { $ref: '#/components/responses/BadRequest' }
         '401':
           description: Неверный email или пароль (ответ одинаков для обоих случаев).
@@ -157,7 +169,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { code: invalid_credentials, message: Неверный email или пароль }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /auth/logout:
     post:
@@ -242,6 +253,7 @@ paths:
                 display_name: Anna
                 email_verified: true
                 created_at: '2026-10-22T09:00:00Z'
+                csrf_token: c3Jm...Zg
         '401': { $ref: '#/components/responses/Unauthorized' }
   /tierlists:
     post:
@@ -641,7 +653,7 @@ components:
       description: Токен из `GET /csrf`; обязателен для POST/PUT/PATCH/DELETE.
   headers:
     SetSessionCookie:
-      description: "`tierl_session=<token>; HttpOnly; Secure; SameSite=Lax; Path=/`"
+      description: "`tierl_session=<token>; Path=/; HttpOnly; SameSite=Lax; Secure` (Secure отключается конфигом в локальной разработке)"
       schema: { type: string }
     SetAnonCookie:
       description: "`tierl_anon=<token>; HttpOnly; Secure; SameSite=Lax; Path=/` (если ещё не выдана)"
@@ -838,6 +850,11 @@ components:
         display_name: { type: string, minLength: 1, maxLength: 50 }
         email_verified: { type: boolean }
         created_at: { type: string, format: date-time }
+        csrf_token:
+          type: string
+          description: >-
+            CSRF-токен сессии. Присутствует в ответах register, login и me;
+            тот же токен выдаёт `GET /csrf`.
     RegisterRequest:
       type: object
       required: [email, password, display_name]
