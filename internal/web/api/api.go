@@ -132,7 +132,7 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 // writeServiceError maps service and domain errors to HTTP responses.
 func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
-	if a.writeSubmissionError(w, r, err) {
+	if a.writeSubmissionError(w, err) {
 		return
 	}
 	var verr *domain.ValidationError

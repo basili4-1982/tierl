@@ -31,7 +31,7 @@ func TestFromRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("GET", "/", nil)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	if _, ok := anonsession.FromRequest(r); ok {
 		t.Error("missing cookie must not yield a session")
 	}
@@ -49,7 +49,7 @@ func TestFromRequest(t *testing.T) {
 }
 
 func TestEnsureAndCookie(t *testing.T) {
-	r := httptest.NewRequest("POST", "/", nil)
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
 	got, err := anonsession.Ensure(r, nil)
 	if err != nil || !got.Fresh {
 		t.Fatalf("ensure: %v %+v", err, got)

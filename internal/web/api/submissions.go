@@ -159,7 +159,7 @@ func (a *API) listUserSubmissions(w http.ResponseWriter, r *http.Request) {
 
 // writeSubmissionError maps the submission-specific errors that are not part
 // of the tierlist service.
-func (a *API) writeSubmissionError(w http.ResponseWriter, r *http.Request, err error) bool {
+func (a *API) writeSubmissionError(w http.ResponseWriter, err error) bool {
 	var already *submission.AlreadySubmittedError
 	switch {
 	case errors.Is(err, submission.ErrTooFewPlacements):
