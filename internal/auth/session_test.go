@@ -184,6 +184,51 @@ func TestSessionLogoutAndLogoutAll(t *testing.T) {
 	}
 }
 
+func TestSessionCleanup(t *testing.T) {
+	svc, store, clock := newSessions(t, time.Hour, 24*time.Hour)
+	ctx := context.Background()
+	live, _, err := svc.Create(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, _, err := svc.Create(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Logout(ctx, revoked); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Create(ctx, "u2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A revoked session is removed while live ones stay.
+	removed, err := svc.Cleanup(ctx, clock.Now())
+	if err != nil || removed != 1 {
+		t.Fatalf("cleanup revoked = %d, %v", removed, err)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("stored = %d, want 2", store.Len())
+	}
+	// After the idle TTL everything is stale.
+	clock.Advance(2 * time.Hour)
+	removed, err = svc.Cleanup(ctx, clock.Now())
+	if err != nil || removed != 2 {
+		t.Fatalf("cleanup expired = %d, %v", removed, err)
+	}
+	if store.Len() != 0 {
+		t.Fatalf("stored = %d, want 0", store.Len())
+	}
+	if _, err := svc.Authenticate(ctx, live); !errors.Is(err, auth.ErrSessionNotFound) {
+		t.Fatalf("live session after cleanup: %v", err)
+	}
+	// Storage errors are reported.
+	store.Errs["DeleteStale"] = errors.New("db down")
+	if _, err := svc.Cleanup(ctx, clock.Now()); err == nil {
+		t.Fatal("expected cleanup error")
+	}
+}
+
 func TestSessionInvalidTokens(t *testing.T) {
 	svc, _, _ := newSessions(t, time.Hour, 24*time.Hour)
 	ctx := context.Background()

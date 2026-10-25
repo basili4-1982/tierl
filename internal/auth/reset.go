@@ -15,7 +15,7 @@ import (
 
 const (
 	// DefaultResetTTL is the lifetime of a password reset link (ADR-003).
-	DefaultResetTTL = 30 * time.Minute
+	DefaultResetTTL = time.Hour
 
 	resetTokenBytes = 32
 )
@@ -118,10 +118,20 @@ func NewPasswordResetService(users Users, resets PasswordResets, sessions Sessio
 	}, nil
 }
 
+// MailConfigured reports whether reset links can be delivered. When false the
+// HTTP layer answers 503 mail_not_configured for forgot/reset and no token is
+// created or logged (production until SMTP lands in TIERL-2).
+func (s *PasswordResetService) MailConfigured() bool {
+	return s.mailer != nil
+}
+
 // Request issues a reset link when the email belongs to an account. It is
 // deliberately silent about unknown emails: the HTTP layer always answers the
 // same way, so the endpoint does not reveal whether an account exists.
 func (s *PasswordResetService) Request(ctx context.Context, email string) error {
+	if s.mailer == nil {
+		return ErrMailNotConfigured
+	}
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		// A malformed address cannot belong to an account and the HTTP layer
@@ -161,9 +171,17 @@ func (s *PasswordResetService) Request(ctx context.Context, email string) error 
 }
 
 // Reset sets a new password by a one-time token and revokes all sessions of
-// the user. Errors: ErrInvalidToken, *ValidationError.
+// the user. Errors: ErrInvalidToken, ErrMailNotConfigured, *ValidationError.
+//
+// If revoking the sessions fails after the password has been changed, the
+// token is already consumed and the new password is active: the caller gets an
+// error (HTTP 500) and must treat the existing sessions as not revoked.
 func (s *PasswordResetService) Reset(ctx context.Context, token, newPassword string) error {
-	// Validate before consuming, so a weak password does not burn the link.
+	if s.mailer == nil {
+		return ErrMailNotConfigured
+	}
+	// Validate before consuming, so a weak password does not burn the link,
+	// and before checking the token shape, so the field error wins.
 	if err := ValidatePassword(newPassword); err != nil {
 		return err
 	}
@@ -190,6 +208,8 @@ func (s *PasswordResetService) Reset(ctx context.Context, token, newPassword str
 	}
 	if s.sessions != nil {
 		if err := s.sessions.RevokeAll(ctx, userID, now); err != nil {
+			// The password and token are already changed/consumed here; see the
+			// method comment.
 			return fmt.Errorf("auth: reset password: %w", err)
 		}
 	}

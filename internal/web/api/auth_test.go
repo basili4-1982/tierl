@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -54,6 +55,8 @@ type authEnvOptions struct {
 	ttl      time.Duration
 	maxAge   time.Duration
 	resetTTL time.Duration
+	// noMail disables the mailer, as in production before SMTP (TIERL-2).
+	noMail bool
 }
 
 func newAuthEnv(t *testing.T, opts authEnvOptions) *authEnv {
@@ -68,7 +71,7 @@ func newAuthEnv(t *testing.T, opts authEnvOptions) *authEnv {
 		opts.maxAge = 24 * time.Hour
 	}
 	if opts.resetTTL == 0 {
-		opts.resetTTL = 30 * time.Minute
+		opts.resetTTL = time.Hour
 	}
 	clk := &clock{now: time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)}
 	users := authtest.NewUsers()
@@ -83,8 +86,12 @@ func newAuthEnv(t *testing.T, opts authEnvOptions) *authEnv {
 	sessionSvc := auth.NewSessionService(sessions, auth.SessionOptions{
 		TTL: opts.ttl, MaxAge: opts.maxAge, Now: clk.Now,
 	})
+	var mailer auth.Mailer = mail
+	if opts.noMail {
+		mailer = nil
+	}
 	resetSvc, err := auth.NewPasswordResetService(users, resets, sessionSvc, auth.ResetOptions{
-		Hash: fastHash, TTL: opts.resetTTL, Now: clk.Now, Mailer: mail,
+		Hash: fastHash, TTL: opts.resetTTL, Now: clk.Now, Mailer: mailer,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +332,12 @@ func TestLogout(t *testing.T) {
 	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", cookie, ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("me after logout = %d", rec.Code)
 	}
-	wantError(t, e.do(t, http.MethodPost, "/auth/logout", "", csrf, cookie, ""), http.StatusUnauthorized, "unauthorized")
+	// Logout is idempotent: the revoked session still gets 204 and a cleared
+	// cookie when a fresh guest token is supplied.
+	guest := e.csrf(t, cookie)
+	if rec := e.do(t, http.MethodPost, "/auth/logout", "", guest, cookie, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("second logout = %d %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestLogoutAll(t *testing.T) {
@@ -366,13 +378,14 @@ func TestCSRFTokens(t *testing.T) {
 		t.Errorf("GET /csrf with session = %q, want %q", got, tokenA)
 	}
 
-	// Own token passes; a guest token is accepted too (the SPA caches it
-	// before login); a token of another session fails.
+	// Own token passes; a token of another session or a guest token with a
+	// live session fails (M1: the session is bound to its own token).
 	if rec := e.do(t, http.MethodPost, "/auth/logout", "", tokenA, cookieA, ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("own token = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := e.do(t, http.MethodPost, "/auth/logout", "", guestA, cookieB, ""); rec.Code != http.StatusNoContent {
-		t.Fatalf("guest token = %d %s", rec.Code, rec.Body.String())
+	wantError(t, e.do(t, http.MethodPost, "/auth/logout", "", guestA, cookieB, ""), http.StatusForbidden, "csrf_failed")
+	if rec := e.do(t, http.MethodPost, "/auth/logout", "", tokenB, cookieB, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("session token = %d %s", rec.Code, rec.Body.String())
 	}
 	_, _, tokenC := e.register(t, "carol@example.com", "correct-horse-battery", "Carol")
 	_, cookieD, _ := e.register(t, "dave@example.com", "correct-horse-battery", "Dave")
@@ -381,7 +394,7 @@ func TestCSRFTokens(t *testing.T) {
 
 func TestSessionExpiryAndRevocation(t *testing.T) {
 	e := newAuthEnv(t, authEnvOptions{ttl: time.Hour, maxAge: 24 * time.Hour})
-	_, cookie, csrf := e.register(t, "anna@example.com", "correct-horse-battery", "Anna")
+	_, cookie, _ := e.register(t, "anna@example.com", "correct-horse-battery", "Anna")
 
 	e.clock.Advance(30 * time.Minute)
 	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", cookie, ""); rec.Code != http.StatusOK {
@@ -392,13 +405,16 @@ func TestSessionExpiryAndRevocation(t *testing.T) {
 		t.Fatalf("me at 61m = %d", rec.Code)
 	}
 
-	// The cookie stops resolving once the absolute ceiling is reached.
+	// The cookie stops resolving once the absolute ceiling is reached, but
+	// logout still answers 204 and clears the cookie (L1).
 	e.clock.Advance(23 * time.Hour)
 	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", cookie, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("me after absolute cap = %d", rec.Code)
 	}
-	if rec := e.do(t, http.MethodPost, "/auth/logout", "", csrf, cookie, ""); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("logout after cap = %d", rec.Code)
+	guest := e.csrf(t, cookie)
+	rec := e.do(t, http.MethodPost, "/auth/logout", "", guest, cookie, "")
+	if rec.Code != http.StatusNoContent || cookieHeader(rec) == "" {
+		t.Fatalf("logout after cap = %d %q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -531,5 +547,114 @@ func TestAuthRateLimitByEmail(t *testing.T) {
 	if rec := e.do(t, http.MethodPost, "/auth/login",
 		`{"email":"bob@example.com","password":"wrong-password-x"}`, "", nil, "198.51.100.9:1"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("other email = %d", rec.Code)
+	}
+}
+
+func TestPasswordResetMailNotConfigured(t *testing.T) {
+	e := newAuthEnv(t, authEnvOptions{noMail: true})
+	guest := e.csrf(t, nil)
+
+	// No token is created, no link is logged or sent.
+	wantError(t, e.do(t, http.MethodPost, "/auth/forgot-password",
+		`{"email":"nobody@example.com"}`, guest, nil, ""), http.StatusServiceUnavailable, "mail_not_configured")
+	wantError(t, e.do(t, http.MethodPost, "/auth/forgot-password",
+		`{"email":"anna@example.com"}`, guest, nil, ""), http.StatusServiceUnavailable, "mail_not_configured")
+	if e.resets.Len() != 0 || len(e.mail.Sent) != 0 {
+		t.Fatalf("tokens=%d mails=%d", e.resets.Len(), len(e.mail.Sent))
+	}
+
+	// Even a token that exists in the store cannot be used while mail is off.
+	token := strings.Repeat("a", 43)
+	if err := e.resets.Create(t.Context(), &auth.PasswordReset{
+		TokenHash: auth.HashSessionToken(token),
+		UserID:    "u1",
+		CreatedAt: e.clock.Now(),
+		ExpiresAt: e.clock.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantError(t, e.do(t, http.MethodPost, "/auth/reset-password",
+		`{"token":"`+token+`","new_password":"another-long-password"}`, guest, nil, ""),
+		http.StatusServiceUnavailable, "mail_not_configured")
+}
+
+func TestResetErrorOrder(t *testing.T) {
+	e := newAuthEnv(t, authEnvOptions{})
+	guest := e.csrf(t, nil)
+
+	// A weak password wins over an invalid token: 422, not 400.
+	m := wantError(t, e.do(t, http.MethodPost, "/auth/reset-password",
+		`{"token":"not-a-token","new_password":"short"}`, guest, nil, ""),
+		http.StatusUnprocessableEntity, "validation_failed")
+	fields, _ := m["details"].(map[string]any)["fields"].(map[string]any)
+	if fields["password"] == nil {
+		t.Errorf("details = %v", m["details"])
+	}
+}
+
+func TestResetRevokeAllFailure(t *testing.T) {
+	e := newAuthEnv(t, authEnvOptions{})
+	_, session, _ := e.register(t, "anna@example.com", "correct-horse-battery", "Anna")
+	guest := e.csrf(t, nil)
+	if rec := e.do(t, http.MethodPost, "/auth/forgot-password",
+		`{"email":"anna@example.com"}`, guest, nil, ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("forgot = %d", rec.Code)
+	}
+	mail, _ := e.mail.Last()
+
+	// RevokeAll fails after the password changed and the token was consumed.
+	// The handler reports 500; the token is burnt and the old sessions survive.
+	e.sessions.Errs["RevokeAll"] = errors.New("db down")
+	wantError(t, e.do(t, http.MethodPost, "/auth/reset-password",
+		`{"token":"`+mail.Token+`","new_password":"another-long-password"}`, guest, nil, ""),
+		http.StatusInternalServerError, "internal_error")
+	delete(e.sessions.Errs, "RevokeAll")
+
+	// The token is single-use even though the request failed.
+	wantError(t, e.do(t, http.MethodPost, "/auth/reset-password",
+		`{"token":"`+mail.Token+`","new_password":"third-long-password"}`, guest, nil, ""),
+		http.StatusBadRequest, "invalid_token")
+	// The session was not revoked (the failure is visible to the client).
+	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", session, ""); rec.Code != http.StatusOK {
+		t.Errorf("session after failed revocation = %d", rec.Code)
+	}
+	// The password change itself is committed.
+	wantError(t, e.do(t, http.MethodPost, "/auth/login",
+		`{"email":"anna@example.com","password":"correct-horse-battery"}`, "", nil, ""),
+		http.StatusUnauthorized, "invalid_credentials")
+	if rec := e.do(t, http.MethodPost, "/auth/login",
+		`{"email":"anna@example.com","password":"another-long-password"}`, "", nil, ""); rec.Code != http.StatusOK {
+		t.Fatalf("login with new password = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSessionReadOncePerRequest(t *testing.T) {
+	e := newAuthEnv(t, authEnvOptions{})
+	_, cookie, csrf := e.register(t, "anna@example.com", "correct-horse-battery", "Anna")
+	before := e.sessions.GetCalls()
+
+	// withSession authenticates once; guardCSRF and requireUser reuse it.
+	if rec := e.do(t, http.MethodPost, "/auth/logout-all", "", csrf, cookie, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout-all = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := e.sessions.GetCalls(); got != before+1 {
+		t.Fatalf("session reads = %d, want %d", got, before+1)
+	}
+}
+
+func TestNoAuthenticator(t *testing.T) {
+	// api.New must not panic and must treat every request as a guest.
+	h := api.New(api.Deps{
+		Tierlists: tierlist.NewService(tierlisttest.NewMemStore(), tierlisttest.Users{}, tierlist.ServiceDeps{}),
+	})
+	req := httptest.NewRequest(http.MethodPost, api.Prefix+"/tierlists", strings.NewReader(createBody))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	wantError(t, rec, http.StatusUnauthorized, "unauthorized")
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.Prefix+"/csrf", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("csrf without authenticator = %d", rec.Code)
 	}
 }

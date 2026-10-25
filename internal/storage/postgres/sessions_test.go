@@ -284,3 +284,38 @@ func TestPasswordResetConcurrentConsume(t *testing.T) {
 		t.Fatalf("ok=%d invalid=%d", ok, invalid)
 	}
 }
+
+func TestSessionsDeleteStale(t *testing.T) {
+	users, sessions, _, _ := newAuthStores(t)
+	ctx := context.Background()
+	if err := users.Create(ctx, user("u1", "anna@example.com")); err != nil {
+		t.Fatal(err)
+	}
+	expired := sessionFor(t, 10, "u1", t0)
+	expired.ExpiresAt = t0.Add(10 * time.Minute)
+	revoked := sessionFor(t, 11, "u1", t0)
+	live := sessionFor(t, 12, "u1", t0)
+	for _, s := range []*auth.Session{expired, revoked, live} {
+		if err := sessions.Create(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sessions.Revoke(ctx, revoked.TokenHash, t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// now is past the expired row and the revoked one, but not the live row.
+	removed, err := sessions.DeleteStale(ctx, t0.Add(30*time.Minute))
+	if err != nil || removed != 2 {
+		t.Fatalf("DeleteStale = %d, %v", removed, err)
+	}
+	if _, err := sessions.Get(ctx, expired.TokenHash); !errors.Is(err, auth.ErrSessionNotFound) {
+		t.Errorf("expired row survived: %v", err)
+	}
+	if _, err := sessions.Get(ctx, revoked.TokenHash); !errors.Is(err, auth.ErrSessionNotFound) {
+		t.Errorf("revoked row survived: %v", err)
+	}
+	if _, err := sessions.Get(ctx, live.TokenHash); err != nil {
+		t.Errorf("live row removed: %v", err)
+	}
+}

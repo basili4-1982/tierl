@@ -47,8 +47,12 @@ func NewCSRF(sessions *auth.SessionService, key []byte) *CSRF {
 	return &CSRF{sessions: sessions, key: key}
 }
 
-// Session returns the live session of the request, if any.
+// Session returns the live session of the request, if any. The root middleware
+// loads it once into the context, so this does not repeat the database read.
 func (c *CSRF) Session(r *http.Request) (*auth.Session, bool) {
+	if sess, ok := sessionFromContext(r.Context()); ok {
+		return sess, true
+	}
 	if c.sessions == nil {
 		return nil, false
 	}
@@ -79,7 +83,9 @@ func (c *CSRF) Token(r *http.Request) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(nonce) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-// Verify reports whether token is valid for the request.
+// Verify reports whether token is valid for the request. A request with a live
+// session accepts only that session's token; a guest accepts only a signed
+// guest token.
 func (c *CSRF) Verify(r *http.Request, token string) bool {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -87,13 +93,8 @@ func (c *CSRF) Verify(r *http.Request, token string) bool {
 	}
 	if sess, ok := c.Session(r); ok {
 		want := encodeCSRFSecret(sess.CSRFSecret)
-		if subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1 {
-			return true
-		}
+		return subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
 	}
-	// A guest token is accepted with and without a session: the SPA caches the
-	// token from before login, and a signed guest token is as unforgeable for
-	// an attacker as a session-bound one.
 	return c.verifyGuest(token)
 }
 
@@ -132,11 +133,23 @@ func (c *CSRF) Handler() http.HandlerFunc {
 	}
 }
 
-// Middleware rejects a state-changing request without a valid token with
-// 403 csrf_failed. Public endpoints (login, registration, guest answers) are
-// registered without it (SPEC section 6).
-func (c *CSRF) Middleware(next http.Handler) http.Handler {
+// Protect wraps next with CSRF verification for state-changing methods. It is
+// the route-level helper for modules that own a public endpoint (for example
+// guest submissions in #48).
+func (c *CSRF) Protect(next http.Handler) http.Handler {
+	return c.ProtectAll(next)
+}
+
+// ProtectAll enforces CSRF on POST/PUT/PATCH/DELETE and skips the explicitly
+// listed public patterns ("POST /api/v1/auth/login"). The API handler applies
+// it once around the root mux, so new routes are protected by default.
+func (c *CSRF) ProtectAll(next http.Handler, exempt ...string) http.Handler {
+	skip := newRouteSet(exempt)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isUnsafeMethod(r.Method) || skip.has(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !c.Verify(r, r.Header.Get(CSRFHeader)) {
 			writeError(w, http.StatusForbidden, "csrf_failed", "Неверный CSRF-токен", nil)
 			return

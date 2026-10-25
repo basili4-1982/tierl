@@ -54,6 +54,16 @@ func (s SessionAuthenticator) UserID(r *http.Request) (string, bool) {
 	return sess.UserID, true
 }
 
+// guestAuthenticator is the no-op default when the API is built without an
+// authenticator: every request is anonymous and authentication-required
+// endpoints answer 401 instead of panicking on a nil interface.
+type guestAuthenticator struct{}
+
+var _ Authenticator = guestAuthenticator{}
+
+// UserID implements Authenticator.
+func (guestAuthenticator) UserID(*http.Request) (string, bool) { return "", false }
+
 // Middleware wraps a handler, for example with a rate limiter.
 type Middleware func(http.Handler) http.Handler
 
@@ -78,6 +88,9 @@ type Deps struct {
 	AuthLimitMiddleware Middleware
 	// CSRF issues and verifies tokens; nil builds a guest-only service.
 	CSRF *CSRF
+	// CSRFExempt adds public state-changing route patterns beyond login and
+	// registration, for example "POST /api/v1/tierlists/{slug}/answers" (#48).
+	CSRFExempt []string
 	// SecureCookies sets the Secure attribute of the session cookie. It is
 	// true in production and false for local HTTP development.
 	SecureCookies bool
@@ -92,15 +105,22 @@ type API struct {
 	resets        *auth.PasswordResetService
 	authLimit     ratelimit.Limiter
 	csrf          *CSRF
+	csrfExempt    *routeSet
+	authRequired  *routeSet
 	secureCookies bool
 	log           *slog.Logger
 	mux           *http.ServeMux
+	handler       http.Handler
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	if d.Auth == nil && d.Sessions != nil {
-		d.Auth = SessionAuthenticator{Sessions: d.Sessions}
+	if d.Auth == nil {
+		if d.Sessions != nil {
+			d.Auth = SessionAuthenticator{Sessions: d.Sessions}
+		} else {
+			d.Auth = guestAuthenticator{}
+		}
 	}
 	if d.CSRF == nil {
 		d.CSRF = NewCSRF(d.Sessions, nil)
@@ -120,19 +140,20 @@ func New(d Deps) *API {
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	a.csrfExempt = newRouteSet(append(append([]string{}, defaultCSRFExempt...), d.CSRFExempt...))
+	a.authRequired = newRouteSet(authRequiredRoutes)
 
 	a.mux.HandleFunc("GET "+Prefix+"/csrf", a.csrf.Handler())
 
 	create := http.Handler(http.HandlerFunc(a.createTierlist))
-	create = a.withUser(a.csrf.Middleware(create))
 	if d.CreateTierlistLimit != nil {
 		create = d.CreateTierlistLimit(create)
 	}
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
-	a.mux.Handle("PATCH "+Prefix+"/tierlists/{slug}", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.updateTierlist))))
-	a.mux.Handle("DELETE "+Prefix+"/tierlists/{slug}", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.deleteTierlist))))
-	a.mux.Handle("POST "+Prefix+"/tierlists/{slug}/close", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.closeTierlist))))
+	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
+	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
+	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
 
 	if d.AuthService != nil && d.Sessions != nil && d.Resets != nil {
 		limited := func(h http.Handler) http.Handler {
@@ -141,27 +162,80 @@ func New(d Deps) *API {
 			}
 			return d.AuthLimitMiddleware(h)
 		}
-		// Login and registration are public and exempt from CSRF (SPEC
-		// section 6): they do not act on an existing session and SameSite=Lax
-		// keeps a cross-site form from carrying one.
+		// Login and registration are in defaultCSRFExempt: they are public and
+		// do not act on an existing session.
 		a.mux.Handle("POST "+Prefix+"/auth/register", limited(http.HandlerFunc(a.register)))
 		a.mux.Handle("POST "+Prefix+"/auth/login", limited(http.HandlerFunc(a.login)))
-		a.mux.Handle("POST "+Prefix+"/auth/logout", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.logout))))
-		a.mux.Handle("POST "+Prefix+"/auth/logout-all", a.withUser(a.csrf.Middleware(http.HandlerFunc(a.logoutAll))))
-		a.mux.Handle("GET "+Prefix+"/auth/me", a.withUser(http.HandlerFunc(a.me)))
-		a.mux.Handle("POST "+Prefix+"/auth/verify-email", limited(a.csrf.Middleware(http.HandlerFunc(a.verifyEmail))))
-		a.mux.Handle("POST "+Prefix+"/auth/forgot-password", limited(a.csrf.Middleware(http.HandlerFunc(a.forgotPassword))))
-		a.mux.Handle("POST "+Prefix+"/auth/reset-password", limited(a.csrf.Middleware(http.HandlerFunc(a.resetPassword))))
+		a.mux.HandleFunc("POST "+Prefix+"/auth/logout", a.logout)
+		a.mux.Handle("POST "+Prefix+"/auth/logout-all", limited(http.HandlerFunc(a.logoutAll)))
+		a.mux.HandleFunc("GET "+Prefix+"/auth/me", a.me)
+		a.mux.Handle("POST "+Prefix+"/auth/verify-email", limited(http.HandlerFunc(a.verifyEmail)))
+		a.mux.Handle("POST "+Prefix+"/auth/forgot-password", limited(http.HandlerFunc(a.forgotPassword)))
+		a.mux.Handle("POST "+Prefix+"/auth/reset-password", limited(http.HandlerFunc(a.resetPassword)))
 	}
 
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	})
+
+	// One CSRF guard around the whole mux: new routes are protected by
+	// default, public ones are listed in defaultCSRFExempt/CSRFExempt.
+	a.handler = a.withSession(a.guardCSRF(a.mux))
 	return a
 }
 
 // ServeHTTP implements http.Handler.
-func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
+func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
+
+// sessionContextKey carries the session loaded once by withSession.
+type sessionContextKey struct{}
+
+// withSession resolves the tierl_session cookie once per request and puts the
+// session into the context. Both requireUser and CSRF verification reuse it,
+// so an authenticated request does not read the session twice.
+func (a *API) withSession(next http.Handler) http.Handler {
+	if a.sessions == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cookie, err := r.Cookie(auth.SessionCookieName); err == nil && cookie.Value != "" {
+			if sess, err := a.sessions.Authenticate(r.Context(), cookie.Value); err == nil {
+				r = r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, sess))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sessionFromContext returns the session loaded by withSession.
+func sessionFromContext(ctx context.Context) (*auth.Session, bool) {
+	sess, ok := ctx.Value(sessionContextKey{}).(*auth.Session)
+	return sess, ok && sess != nil
+}
+
+// guardCSRF enforces the token for every unsafe method except the explicit
+// public routes. Routes that require authentication pass a guest through so
+// the handler answers 401 (there is no session to protect); with a session the
+// token is mandatory.
+func (a *API) guardCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isUnsafeMethod(r.Method) || a.csrfExempt.has(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, ok := sessionFromContext(r.Context()); !ok && a.authRequired.has(r) {
+			if id, signedIn := a.auth.UserID(r); !signedIn || id == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if !a.csrf.Verify(r, r.Header.Get(CSRFHeader)) {
+			writeError(w, http.StatusForbidden, "csrf_failed", "Неверный CSRF-токен", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // errorBody is the Error schema of the contract.
 type errorBody struct {
@@ -181,26 +255,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// userIDKey carries the authenticated user ID from withUser to handlers.
-type userIDKey struct{}
-
-// withUser rejects a request without a signed-in user before any other check,
-// so an anonymous caller always gets 401 and not a CSRF failure.
-func (a *API) withUser(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := a.auth.UserID(r)
-		if !ok || id == "" {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется вход", nil)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userIDKey{}, id)))
-	})
-}
-
-// requireUser returns the signed-in user or writes 401.
+// requireUser returns the signed-in user or writes 401. The session loaded by
+// withSession is reused, so there is no second database read.
 func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if id, ok := r.Context().Value(userIDKey{}).(string); ok && id != "" {
-		return id, true
+	if sess, ok := sessionFromContext(r.Context()); ok {
+		return sess.UserID, true
 	}
 	id, ok := a.auth.UserID(r)
 	if !ok || id == "" {

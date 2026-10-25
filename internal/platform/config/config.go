@@ -25,6 +25,9 @@ const (
 	defaultAuthInterval = 30 * time.Second
 
 	defaultPublicBaseURL = "http://localhost:8080"
+	defaultEnv           = "production"
+
+	defaultSessionGCInterval = time.Hour
 
 	defaultStorageFSPath = "./data/media"
 	defaultStoragePublic = "/media"
@@ -66,6 +69,19 @@ type Config struct {
 	// CSRFKey signs guest CSRF tokens (TIERL_CSRF_KEY, at least 16 characters).
 	// When empty, a key is derived from IPHashSalt.
 	CSRFKey string
+	// Env is the deployment environment (TIERL_ENV, default production).
+	Env string
+	// MailDev explicitly enables the development log mailer (TIERL_MAIL_DEV).
+	// The log mailer is also enabled when Env is "dev"; otherwise password
+	// reset endpoints answer 503 mail_not_configured.
+	MailDev bool
+	// TrustedProxies lists IPs and CIDRs whose X-Forwarded-For header is
+	// trusted (TIERL_TRUSTED_PROXIES, comma-separated). Empty means the header
+	// is ignored and r.RemoteAddr is used as is.
+	TrustedProxies []string
+	// SessionGCInterval is the period of expired/revoked session cleanup
+	// (TIERL_SESSION_GC_INTERVAL, default 1h).
+	SessionGCInterval time.Duration
 
 	// AuthBurst and AuthInterval limit login, registration and password reset
 	// per IP and per email (TIERL_RATELIMIT_AUTH_BURST, default 10;
@@ -119,6 +135,9 @@ func Load(getenv func(string) string) (Config, error) {
 		CookieSecure:  true,
 		PublicBaseURL: valueOr(getenv("TIERL_PUBLIC_BASE_URL"), defaultPublicBaseURL),
 		CSRFKey:       strings.TrimSpace(getenv("TIERL_CSRF_KEY")),
+		Env:           valueOr(getenv("TIERL_ENV"), defaultEnv),
+
+		SessionGCInterval: defaultSessionGCInterval,
 
 		AuthBurst:    defaultAuthBurst,
 		AuthInterval: defaultAuthInterval,
@@ -197,6 +216,30 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if cfg.CSRFKey != "" && len(cfg.CSRFKey) < 16 {
 		return Config{}, errors.New("TIERL_CSRF_KEY: must be at least 16 characters")
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_MAIL_DEV")); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_MAIL_DEV: %w", err)
+		}
+		cfg.MailDev = b
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_TRUSTED_PROXIES")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			if proxy := strings.TrimSpace(part); proxy != "" {
+				cfg.TrustedProxies = append(cfg.TrustedProxies, proxy)
+			}
+		}
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SESSION_GC_INTERVAL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_SESSION_GC_INTERVAL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_SESSION_GC_INTERVAL: must be positive")
+		}
+		cfg.SessionGCInterval = d
 	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_AUTH_BURST")); raw != "" {
@@ -298,4 +341,11 @@ func valueOr(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// DevMailEnabled reports whether the development log mailer may be used.
+// Production builds must configure SMTP (TIERL-2) instead: without a mailer
+// forgot-password and reset-password answer 503 mail_not_configured.
+func (c Config) DevMailEnabled() bool {
+	return c.MailDev || strings.EqualFold(strings.TrimSpace(c.Env), "dev")
 }

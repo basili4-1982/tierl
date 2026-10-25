@@ -14,6 +14,7 @@ import (
 	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/platform/config"
 	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
+	"github.com/basili4-1982/tierl/internal/platform/realip"
 	"github.com/basili4-1982/tierl/internal/storage/postgres"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 	"github.com/basili4-1982/tierl/internal/web"
@@ -42,20 +43,23 @@ func setup(ctx context.Context, cfg config.Config, log *slog.Logger) (web.Deps, 
 	if err != nil {
 		return web.Deps{}, nil, fmt.Errorf("database: %w", err)
 	}
-	closeAll := pool.Close
 
 	services, err := newServices(pool, cfg, log)
 	if err != nil {
-		closeAll()
+		pool.Close()
 		return web.Deps{}, nil, err
 	}
 	deps, err := newDeps(pool, cfg, log, api.SessionAuthenticator{Sessions: services.sessions},
 		userDirectory{auth: services.auth}, services)
 	if err != nil {
-		closeAll()
+		pool.Close()
 		return web.Deps{}, nil, err
 	}
-	return deps, closeAll, nil
+	stopGC := startSessionGC(services.sessions, cfg.SessionGCInterval, log)
+	return deps, func() {
+		stopGC()
+		pool.Close()
+	}, nil
 }
 
 // services are the auth components shared by the HTTP adapters.
@@ -82,10 +86,18 @@ func newServices(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (servi
 		TTL:    cfg.SessionTTL,
 		MaxAge: cfg.SessionMaxAge,
 	})
+	var mailer auth.Mailer
+	if cfg.DevMailEnabled() {
+		// Development only: writes reset links to the log. Production must
+		// configure SMTP (TIERL-2); until then forgot/reset answer 503.
+		mailer = auth.LogMailer{Log: log, BaseURL: cfg.PublicBaseURL}
+	} else {
+		log.Warn("password reset email is disabled: set TIERL_ENV=dev or TIERL_MAIL_DEV=true for the log mailer; SMTP lands in TIERL-2")
+	}
 	resets, err := auth.NewPasswordResetService(users, postgres.NewPasswordResetStore(pool), sessions,
 		auth.ResetOptions{
 			Hash:   params,
-			Mailer: auth.LogMailer{Log: log, BaseURL: cfg.PublicBaseURL},
+			Mailer: mailer,
 		})
 	if err != nil {
 		return services{}, fmt.Errorf("password reset service: %w", err)
@@ -133,7 +145,12 @@ func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authn api.
 		CSRF:                newCSRF(cfg, svc.sessions),
 		SecureCookies:       cfg.CookieSecure,
 	})
-	return web.Deps{API: handler, Ready: pool.Ping}, nil
+
+	proxy, err := realip.New(cfg.TrustedProxies)
+	if err != nil {
+		return web.Deps{}, fmt.Errorf("trusted proxies: %w", err)
+	}
+	return web.Deps{API: proxy.Middleware(handler), Ready: pool.Ping}, nil
 }
 
 // newCSRF builds the CSRF service. The signing key is TIERL_CSRF_KEY or, when

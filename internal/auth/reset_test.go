@@ -31,7 +31,7 @@ func newResetEnv(t *testing.T) *resetEnv {
 	clock := newClock()
 	svc, err := auth.NewPasswordResetService(users, resets, sessions, auth.ResetOptions{
 		Hash:   auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
-		TTL:    30 * time.Minute,
+		TTL:    auth.DefaultResetTTL,
 		Now:    clock.Now,
 		Mailer: mail,
 	})
@@ -144,7 +144,7 @@ func TestPasswordResetExpiryAndInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	mail, _ := e.mail.Last()
-	e.clock.Advance(31 * time.Minute)
+	e.clock.Advance(auth.DefaultResetTTL + time.Minute)
 	if err := e.svc.Reset(ctx, mail.Token, "another-long-password"); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("expired token = %v", err)
 	}
@@ -241,6 +241,38 @@ func TestPasswordResetNilDependencies(t *testing.T) {
 	}
 }
 
+func TestPasswordResetMailNotConfigured(t *testing.T) {
+	users := authtest.NewUsers()
+	register, err := auth.NewService(users, auth.Options{Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := register.Register(context.Background(), auth.RegisterInput{
+		Email: "anna@example.com", Password: "correct-horse-battery", DisplayName: "Anna",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resets := authtest.NewResets()
+	svc, err := auth.NewPasswordResetService(users, resets, nil, auth.ResetOptions{
+		Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.MailConfigured() {
+		t.Fatal("MailConfigured must be false without a mailer")
+	}
+	if err := svc.Request(context.Background(), "anna@example.com"); !errors.Is(err, auth.ErrMailNotConfigured) {
+		t.Fatalf("Request = %v", err)
+	}
+	if resets.Len() != 0 {
+		t.Fatal("token stored without a mailer")
+	}
+	if err := svc.Reset(context.Background(), strings.Repeat("a", 43), "another-long-password"); !errors.Is(err, auth.ErrMailNotConfigured) {
+		t.Fatalf("Reset = %v", err)
+	}
+}
+
 func TestPasswordResetRandomFailure(t *testing.T) {
 	users := authtest.NewUsers()
 	svcUsers, err := auth.NewService(users, auth.Options{Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1}})
@@ -254,8 +286,9 @@ func TestPasswordResetRandomFailure(t *testing.T) {
 	}
 	resets := authtest.NewResets()
 	svc, err := auth.NewPasswordResetService(users, resets, nil, auth.ResetOptions{
-		Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
-		Rand: failingReader{},
+		Hash:   auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
+		Rand:   failingReader{},
+		Mailer: &authtest.Mailer{},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -17,8 +17,10 @@ info:
     * Все небезопасные методы (POST, PUT, PATCH, DELETE) требуют заголовок
       `X-CSRF-Token`, кроме публичных `POST /auth/login` и `POST /auth/register`
       (они не действуют на существующую сессию). Токен выдаёт `GET /csrf`;
-      для запроса с сессией он привязан к ней, гостю выдаётся подписанный
-      токен. Тот же токен возвращают `POST /auth/register`, `POST /auth/login`
+      при живой сессии принимается только токен этой сессии, без сессии -
+      только гостевой подписанный токен. После входа клиент перезапрашивает
+      токен (SPA делает это по ответу `403 csrf_failed`).
+      Тот же токен возвращают `POST /auth/register`, `POST /auth/login`
       и `GET /auth/me` в поле `csrf_token`.
       Без заголовка или с неверным токеном - `403 csrf_failed`.
 
@@ -175,10 +177,12 @@ paths:
       tags: [auth]
       operationId: logout
       summary: Выход из текущей сессии
+      description: >-
+        Идемпотентен: истёкшая или уже отозванная сессия тоже завершается 204,
+        cookie очищается. CSRF-токен обязателен.
       responses:
         '204':
           description: Сессия закрыта, cookie очищена.
-        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /auth/logout-all:
     post:
@@ -195,7 +199,11 @@ paths:
       tags: [auth]
       operationId: forgotPassword
       summary: Запрос сброса пароля
-      description: Ответ всегда одинаков, независимо от того, существует ли email.
+      description: >-
+        Ответ всегда одинаков, независимо от того, существует ли email.
+        Ссылка действует 1 час. Без SMTP и без dev-мейлера
+        (`TIERL_ENV=dev`/`TIERL_MAIL_DEV=true`) эндпоинт отвечает
+        `503 mail_not_configured` и токен не создаётся.
       security:
         - csrfHeader: []
       requestBody:
@@ -209,12 +217,16 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/MailNotConfigured' }
   /auth/reset-password:
     post:
       tags: [auth]
       operationId: resetPassword
       summary: Установка нового пароля по токену
-      description: После смены пароля все сессии пользователя сбрасываются.
+      description: >-
+        После смены пароля все сессии пользователя сбрасываются. Ссылка живёт
+        1 час и одноразовая. Без SMTP и без dev-мейлера эндпоинт отвечает
+        `503 mail_not_configured`.
       security:
         - csrfHeader: []
       requestBody:
@@ -234,6 +246,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/MailNotConfigured' }
   /auth/me:
     get:
       tags: [auth]
@@ -715,6 +728,12 @@ components:
             details:
               fields:
                 password: Длина пароля от 10 до 128 символов
+    MailNotConfigured:
+      description: Отправка писем не настроена (нет SMTP и dev-мейлера).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { code: mail_not_configured, message: Отправка писем не настроена }
     TooManyRequests:
       description: Превышен лимит запросов.
       headers:

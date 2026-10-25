@@ -92,7 +92,9 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	a.openSession(w, r, u, http.StatusOK)
 }
 
-// logout closes the current session and clears the cookie (204).
+// logout closes the current session and clears the cookie (204). It is
+// idempotent: an expired or already revoked session also ends with 204 and a
+// cleared cookie, so the SPA can always sign out.
 func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
 		if err := a.sessions.Logout(r.Context(), cookie.Value); err != nil {
@@ -161,6 +163,10 @@ func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	if !a.allowByEmail(w, r, "forgot", req.Email) {
 		return
 	}
+	if !a.resets.MailConfigured() {
+		writeError(w, http.StatusServiceUnavailable, "mail_not_configured", "Отправка писем не настроена", nil)
+		return
+	}
 	if err := a.resets.Request(r.Context(), req.Email); err != nil {
 		// Delivery or storage problems must not reveal whether the address
 		// exists; log them and keep the uniform answer.
@@ -173,6 +179,10 @@ func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
 	var req resetPasswordRequest
 	if !decode(w, r, &req) {
+		return
+	}
+	if !a.resets.MailConfigured() {
+		writeError(w, http.StatusServiceUnavailable, "mail_not_configured", "Отправка писем не настроена", nil)
 		return
 	}
 	if err := a.resets.Reset(r.Context(), req.Token, req.NewPassword); err != nil {
@@ -233,6 +243,8 @@ func (a *API) writeAuthError(w http.ResponseWriter, r *http.Request, err error) 
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Неверный email или пароль", nil)
 	case errors.Is(err, auth.ErrInvalidToken):
 		writeError(w, http.StatusBadRequest, "invalid_token", "Ссылка недействительна или устарела", nil)
+	case errors.Is(err, auth.ErrMailNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, "mail_not_configured", "Отправка писем не настроена", nil)
 	default:
 		a.log.ErrorContext(r.Context(), "auth request failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка", nil)

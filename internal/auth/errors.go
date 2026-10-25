@@ -22,6 +22,9 @@ var (
 	// ErrInvalidToken is returned for unknown, expired and already used one-time
 	// tokens (password reset, email verification).
 	ErrInvalidToken = errors.New("auth: invalid or expired token")
+	// ErrMailNotConfigured is returned when password reset is requested but no
+	// mailer is configured (mail is off in production until TIERL-2/SMTP).
+	ErrMailNotConfigured = errors.New("auth: mail is not configured")
 	// ErrInvalidHash is returned when a stored hash is not a supported PHC argon2id string.
 	ErrInvalidHash = errors.New("auth: invalid password hash")
 	// ErrRandom is returned when the random source fails.

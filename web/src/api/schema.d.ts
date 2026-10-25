@@ -90,7 +90,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Выход из текущей сессии */
+        /**
+         * Выход из текущей сессии
+         * @description Идемпотентен: истёкшая или уже отозванная сессия тоже завершается 204, cookie очищается. CSRF-токен обязателен.
+         */
         post: operations["logout"];
         delete?: never;
         options?: never;
@@ -126,7 +129,7 @@ export interface paths {
         put?: never;
         /**
          * Запрос сброса пароля
-         * @description Ответ всегда одинаков, независимо от того, существует ли email.
+         * @description Ответ всегда одинаков, независимо от того, существует ли email. Ссылка действует 1 час. Без SMTP и без dev-мейлера (`TIERL_ENV=dev`/`TIERL_MAIL_DEV=true`) эндпоинт отвечает `503 mail_not_configured` и токен не создаётся.
          */
         post: operations["forgotPassword"];
         delete?: never;
@@ -146,7 +149,7 @@ export interface paths {
         put?: never;
         /**
          * Установка нового пароля по токену
-         * @description После смены пароля все сессии пользователя сбрасываются.
+         * @description После смены пароля все сессии пользователя сбрасываются. Ссылка живёт 1 час и одноразовая. Без SMTP и без dev-мейлера эндпоинт отвечает `503 mail_not_configured`.
          */
         post: operations["resetPassword"];
         delete?: never;
@@ -694,6 +697,21 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Отправка писем не настроена (нет SMTP и dev-мейлера). */
+        MailNotConfigured: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "code": "mail_not_configured",
+                 *       "message": "Отправка писем не настроена"
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description Превышен лимит запросов. */
         TooManyRequests: {
             headers: {
@@ -938,7 +956,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -990,6 +1007,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["MailNotConfigured"];
         };
     };
     resetPassword: {
@@ -1036,6 +1054,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationFailed"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["MailNotConfigured"];
         };
     };
     getCurrentUser: {

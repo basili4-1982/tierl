@@ -383,8 +383,22 @@ func TestSetup_SessionAuthAndUserDirectory(t *testing.T) {
 	defer closeFn()
 	h := web.NewHandler(deps)
 
+	// Password reset is off without SMTP or an explicit dev mailer (H2).
+	rec := doReq(t, h, http.MethodGet, "/api/v1/csrf", "", "", nil)
+	var csrfBody struct {
+		Token string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &csrfBody); err != nil || csrfBody.Token == "" {
+		t.Fatalf("csrf = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doReq(t, h, http.MethodPost, "/api/v1/auth/forgot-password",
+		`{"email":"anna@example.com"}`, csrfBody.Token, nil)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "mail_not_configured") {
+		t.Fatalf("forgot without mail = %d %s", rec.Code, rec.Body.String())
+	}
+
 	// Registration is public and opens a session (201 + cookie + csrf token).
-	rec := doReq(t, h, http.MethodPost, "/api/v1/auth/register",
+	rec = doReq(t, h, http.MethodPost, "/api/v1/auth/register",
 		`{"email":"anna@example.com","password":"correct-horse-battery","display_name":"Anna"}`, "", nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("register = %d %s", rec.Code, rec.Body.String())

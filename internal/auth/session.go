@@ -63,6 +63,9 @@ type Sessions interface {
 	Revoke(ctx context.Context, tokenHash []byte, now time.Time) error
 	// RevokeAll revokes every live session of the user.
 	RevokeAll(ctx context.Context, userID string, now time.Time) error
+	// DeleteStale removes expired and revoked sessions and returns how many
+	// rows were deleted. It is the periodic cleanup used by SessionService.
+	DeleteStale(ctx context.Context, now time.Time) (int64, error)
 }
 
 // SessionRevoker is the part of the session storage password reset needs.
@@ -240,4 +243,15 @@ func (s *SessionService) RevokeAll(ctx context.Context, userID string, now time.
 		return fmt.Errorf("auth: revoke sessions: %w", err)
 	}
 	return nil
+}
+
+// Cleanup deletes sessions that are expired, past their absolute lifetime or
+// revoked and returns the number of removed rows. The application calls it at
+// startup and then periodically (see app/sessions_gc.go).
+func (s *SessionService) Cleanup(ctx context.Context, now time.Time) (int64, error) {
+	n, err := s.store.DeleteStale(ctx, now.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("auth: cleanup sessions: %w", err)
+	}
+	return n, nil
 }

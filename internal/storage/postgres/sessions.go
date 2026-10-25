@@ -94,3 +94,24 @@ func (s *SessionStore) RevokeAll(ctx context.Context, userID string, now time.Ti
 	}
 	return nil
 }
+
+// DeleteStale implements auth.Sessions. The two DELETEs are separate so the
+// planner can use sessions_expires_at_idx for expired rows and the partial
+// sessions_revoked_at_idx for revoked ones instead of a sequential scan.
+// absolute_expires_at needs no separate predicate: expires_at is never later
+// than it, so an absolutely expired row also matches expires_at <= now.
+func (s *SessionStore) DeleteStale(ctx context.Context, now time.Time) (int64, error) {
+	var total int64
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= $1`, now)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: delete expired sessions: %w", err)
+	}
+	total += tag.RowsAffected()
+
+	tag, err = s.pool.Exec(ctx, `DELETE FROM sessions WHERE revoked_at IS NOT NULL`)
+	if err != nil {
+		return total, fmt.Errorf("postgres: delete revoked sessions: %w", err)
+	}
+	total += tag.RowsAffected()
+	return total, nil
+}

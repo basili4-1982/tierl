@@ -108,6 +108,7 @@ func (m *Users) UpdatePasswordHash(_ context.Context, id, hash string, now time.
 type Sessions struct {
 	mu     sync.Mutex
 	byHash map[string]*auth.Session
+	gets   int
 
 	// Errs makes the named method fail with the error.
 	Errs map[string]error
@@ -134,6 +135,14 @@ func (m *Sessions) Len() int {
 	return len(m.byHash)
 }
 
+// GetCalls returns how many times Get was called; tests use it to prove that
+// one request does not read the session twice.
+func (m *Sessions) GetCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gets
+}
+
 // Create implements auth.Sessions.
 func (m *Sessions) Create(_ context.Context, s *auth.Session) error {
 	m.mu.Lock()
@@ -149,6 +158,7 @@ func (m *Sessions) Create(_ context.Context, s *auth.Session) error {
 func (m *Sessions) Get(_ context.Context, tokenHash []byte) (*auth.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.gets++
 	if err := m.Errs["Get"]; err != nil {
 		return nil, err
 	}
@@ -203,6 +213,23 @@ func (m *Sessions) RevokeAll(_ context.Context, userID string, now time.Time) er
 		}
 	}
 	return nil
+}
+
+// DeleteStale implements auth.Sessions.
+func (m *Sessions) DeleteStale(_ context.Context, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["DeleteStale"]; err != nil {
+		return 0, err
+	}
+	var removed int64
+	for hash, s := range m.byHash {
+		if !now.Before(s.ExpiresAt) || !now.Before(s.AbsoluteExpiresAt) || s.RevokedAt != nil {
+			delete(m.byHash, hash)
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 // Resets is a map-backed auth.PasswordResets.

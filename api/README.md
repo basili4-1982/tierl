@@ -11,7 +11,9 @@
   (HttpOnly, SameSite=Lax; Secure, в локальной разработке отключается);
 - сессия серверная, со скользящим продлением и абсолютным потолком;
 - CSRF: токен из `GET /csrf` отправляется в заголовке `X-CSRF-Token` на все
-  POST/PUT/PATCH/DELETE, кроме публичных `/auth/login` и `/auth/register`;
+  POST/PUT/PATCH/DELETE, кроме публичных `/auth/login` и `/auth/register`.
+  При живой сессии принимается только токен этой сессии; после входа токен
+  перезапрашивается (SPA делает ретрай по `403 csrf_failed`).
 - ошибки: `{ "code": "...", "message": "...", "details": {...} }`;
 - пагинация курсором: `?limit=&cursor=` -> `{ items, next_cursor }`;
 - видимость опроса: `public` (в каталоге) или `unlisted` (только по ссылке).
