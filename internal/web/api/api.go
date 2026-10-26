@@ -124,6 +124,11 @@ func New(d Deps) *API {
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/submissions", a.createSubmission)
+	a.mux.HandleFunc("PUT "+Prefix+"/tierlists/{slug}/submissions/mine", a.replaceSubmission)
+	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}/submissions/mine", a.getMySubmission)
+	a.mux.HandleFunc("GET "+Prefix+"/results/{id}", a.getResult)
+	a.mux.HandleFunc("GET "+Prefix+"/results/{id}/stats", a.getResultStats)
 	a.mountShareRoutes()
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
@@ -221,6 +226,15 @@ func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 		writeError(w, http.StatusForbidden, "email_not_verified", "Подтвердите email, чтобы создавать опросы", nil)
 	case errors.Is(err, domain.ErrStructureLocked):
 		writeError(w, http.StatusConflict, "tierlist_locked", "Опрос уже проходили, структуру менять нельзя", nil)
+	case errors.Is(err, tierlist.ErrAlreadySubmitted):
+		var already *tierlist.AlreadySubmittedError
+		details := map[string]any(nil)
+		if errors.As(err, &already) {
+			details = map[string]any{"result_id": already.ResultID}
+		}
+		writeError(w, http.StatusConflict, "already_submitted", "Вы уже отвечали на этот опрос", details)
+	case errors.Is(err, tierlist.ErrNotAcceptingSubmissions):
+		writeError(w, http.StatusConflict, "tierlist_closed", "Опрос закрыт", nil)
 	case errors.Is(err, tierlist.ErrSlugTaken):
 		writeError(w, http.StatusConflict, "slug_taken", "Этот адрес уже занят", map[string]any{"fields": map[string]string{"slug": "уже занят"}})
 	case errors.Is(err, domain.ErrInvalidTransition):

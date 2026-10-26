@@ -41,11 +41,12 @@ func (s *Store) Save(ctx context.Context, sub tierlist.Submission, now time.Time
 		}
 
 		// The conflict update locks an existing row, so concurrent saves of
-		// one session serialize. xmax <> 0 marks the update path.
+		// one session serialize. xmax <> 0 marks the update path. updated_at
+		// never moves backwards, even if a caller supplies an older timestamp.
 		err = tx.QueryRow(ctx, `
 			INSERT INTO submissions (id, tierlist_id, session_id, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $4)
-			ON CONFLICT (tierlist_id, session_id) DO UPDATE SET updated_at = GREATEST(EXCLUDED.updated_at, submissions.created_at)
+			ON CONFLICT (tierlist_id, session_id) DO UPDATE SET updated_at = GREATEST(EXCLUDED.updated_at, submissions.updated_at)
 			RETURNING id, xmax <> 0`,
 			sub.ID, sub.TierlistID, sub.SessionID, now).Scan(&res.SubmissionID, &res.Replaced)
 		if err != nil {
@@ -158,4 +159,45 @@ func (s *Store) Distributions(ctx context.Context, tierlistID string) ([]tierlis
 		return nil, fmt.Errorf("postgres: query distributions: %w", err)
 	}
 	return out, nil
+}
+
+// SubmissionByID implements tierlist.SubmissionLookup.
+func (s *Store) SubmissionByID(ctx context.Context, id string) (*tierlist.SubmissionRecord, error) {
+	return s.submission(ctx, `WHERE id = $1`, id)
+}
+
+// SubmissionBySession implements tierlist.SubmissionLookup.
+func (s *Store) SubmissionBySession(ctx context.Context, tierlistID, sessionID string) (*tierlist.SubmissionRecord, error) {
+	return s.submission(ctx, `WHERE tierlist_id = $1 AND session_id = $2`, tierlistID, sessionID)
+}
+
+func (s *Store) submission(ctx context.Context, where string, args ...any) (*tierlist.SubmissionRecord, error) {
+	var rec tierlist.SubmissionRecord
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, tierlist_id, session_id, created_at, updated_at
+		FROM submissions `+where, args...).
+		Scan(&rec.ID, &rec.TierlistID, &rec.SessionID, &rec.CreatedAt, &rec.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, tierlist.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("postgres: load submission: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT item_id, tier_id FROM placements
+		WHERE submission_id = $1 ORDER BY item_id`, rec.ID)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: load placements: %w", err)
+	}
+	placements, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (tierlist.Placement, error) {
+		var p tierlist.Placement
+		err := row.Scan(&p.ItemID, &p.TierID)
+		return p, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("postgres: scan placements: %w", err)
+	}
+	rec.Placements = placements
+	return &rec, nil
 }
