@@ -76,10 +76,11 @@ func newMVPFixture(t *testing.T) *mvpFixture {
 
 	cfg := testConfig(url)
 	cfg.CreateTierlistBurst = 10
-	deps, err := newDeps(pool, cfg, discardLog(), headerAuth{}, mvpUsers{store: userStore})
+	deps, closeDeps, err := newDeps(pool, cfg, discardLog(), headerAuth{}, mvpUsers{store: userStore})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(closeDeps)
 	return &mvpFixture{
 		ctx: ctx, pool: pool, store: postgres.New(pool), auth: authSvc,
 		handler: web.NewHandler(deps), author: author,
