@@ -40,20 +40,38 @@ type ServiceDeps struct {
 	Now func() time.Time
 	// Rand is the entropy source for IDs and slugs; defaults to crypto/rand.Reader.
 	Rand io.Reader
+	// Answers persists participant answers. When nil, a store that implements
+	// Answers is used automatically.
+	Answers Answers
+	// Lookup reads stored answers by result ID or session. When nil, a store
+	// that implements SubmissionLookup is used automatically.
+	Lookup SubmissionLookup
 }
 
 // Service holds the business logic of tier list management: creation,
 // reading, editing, closing and deleting by the author.
 type Service struct {
-	store Store
-	users Users
-	now   func() time.Time
-	rand  io.Reader
+	store   Store
+	users   Users
+	answers Answers
+	lookup  SubmissionLookup
+	now     func() time.Time
+	rand    io.Reader
 }
 
 // NewService builds a Service on top of the given store and user directory.
 func NewService(store Store, users Users, deps ServiceDeps) *Service {
 	s := &Service{store: store, users: users, now: deps.Now, rand: deps.Rand}
+	if deps.Answers != nil {
+		s.answers = deps.Answers
+	} else if answers, ok := store.(Answers); ok {
+		s.answers = answers
+	}
+	if deps.Lookup != nil {
+		s.lookup = deps.Lookup
+	} else if lookup, ok := store.(SubmissionLookup); ok {
+		s.lookup = lookup
+	}
 	if s.now == nil {
 		s.now = time.Now
 	}
