@@ -100,6 +100,9 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput, replace bool) (*Su
 			return nil, err
 		}
 	}
+	if err := validatePlacements(t, in.Placements); err != nil {
+		return nil, err
+	}
 
 	id, err := s.newID()
 	if err != nil {
@@ -133,6 +136,35 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput, replace bool) (*Su
 		}
 	}
 	return s.submissionDetails(ctx, rec, t, "")
+}
+
+// validatePlacements checks that every placed item and tier belong to the
+// tier list and that no item is placed twice. Storage enforces the same rules,
+// but validating here keeps the invariant independent of the implementation.
+func validatePlacements(t *domain.Tierlist, placements []Placement) error {
+	items := make(map[string]struct{}, len(t.Items))
+	for _, item := range t.Items {
+		items[item.ID] = struct{}{}
+	}
+	tiers := make(map[string]struct{}, len(t.Tiers))
+	for _, tier := range t.Tiers {
+		tiers[tier.ID] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(placements))
+	for _, p := range placements {
+		if _, ok := items[p.ItemID]; !ok {
+			return &domain.ValidationError{Field: "placements", Reason: "item does not belong to the tier list"}
+		}
+		if _, ok := tiers[p.TierID]; !ok {
+			return &domain.ValidationError{Field: "placements", Reason: "tier does not belong to the tier list"}
+		}
+		if _, dup := seen[p.ItemID]; dup {
+			return &domain.ValidationError{Field: "placements", Reason: "item is placed more than once"}
+		}
+		seen[p.ItemID] = struct{}{}
+	}
+	return nil
 }
 
 // MySubmission returns the answer of a session or ErrNotFound.
