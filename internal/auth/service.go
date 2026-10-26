@@ -44,14 +44,17 @@ type Options struct {
 	Now func() time.Time
 	// Rand is the entropy source for IDs and salts; default crypto/rand.
 	Rand io.Reader
+	// Sessions, when set, lets ChangePassword revoke every session of a user.
+	Sessions SessionRevoker
 }
 
 // Service registers and authenticates users.
 type Service struct {
-	users  Users
-	hasher *Hasher
-	now    func() time.Time
-	rand   io.Reader
+	users    Users
+	sessions SessionRevoker
+	hasher   *Hasher
+	now      func() time.Time
+	rand     io.Reader
 	// dummyHash is verified when the email is unknown, so that response time
 	// does not reveal whether the account exists.
 	dummyHash string
@@ -77,7 +80,7 @@ func NewService(users Users, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: dummy hash: %w", err)
 	}
-	return &Service{users: users, hasher: h, now: opts.Now, rand: opts.Rand, dummyHash: dummy}, nil
+	return &Service{users: users, sessions: opts.Sessions, hasher: h, now: opts.Now, rand: opts.Rand, dummyHash: dummy}, nil
 }
 
 // RegisterInput is the data of a new account.
@@ -179,4 +182,67 @@ func newID(r io.Reader) (string, error) {
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
+}
+
+// ChangePassword verifies the current password, stores a hash of the new one
+// and revokes every session of the user, including the current one.
+// Errors: ErrInvalidCredentials when the old password is wrong,
+// *ValidationError (ErrInvalid) when the new password is invalid.
+func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return err
+	}
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	ok, err := s.hasher.Verify(oldPassword, u.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("auth: change password: %w", err)
+	}
+	if !ok {
+		return ErrInvalidCredentials
+	}
+	hash, err := s.hasher.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("auth: change password: %w", err)
+	}
+	if err := s.storePassword(ctx, userID, hash); err != nil {
+		return fmt.Errorf("auth: change password: %w", err)
+	}
+	return nil
+}
+
+// ResetPassword sets a new password without checking the old one (for the
+// email reset flow) and revokes every session of the user.
+func (s *Service) ResetPassword(ctx context.Context, userID, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return err
+	}
+	hash, err := s.hasher.Hash(newPassword)
+	if err != nil {
+		return fmt.Errorf("auth: reset password: %w", err)
+	}
+	if err := s.storePassword(ctx, userID, hash); err != nil {
+		return fmt.Errorf("auth: reset password: %w", err)
+	}
+	return nil
+}
+
+// SetPassword is an alias for ResetPassword.
+func (s *Service) SetPassword(ctx context.Context, userID, newPassword string) error {
+	return s.ResetPassword(ctx, userID, newPassword)
+}
+
+func (s *Service) storePassword(ctx context.Context, userID, hash string) error {
+	now := s.now().UTC()
+	if err := s.users.UpdatePasswordHash(ctx, userID, hash, now); err != nil {
+		return err
+	}
+	if s.sessions != nil {
+		if err := s.sessions.DeleteByUserID(ctx, userID); err != nil {
+			return fmt.Errorf("revoke sessions: %w", err)
+		}
+	}
+	return nil
 }

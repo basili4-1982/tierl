@@ -127,6 +127,9 @@ func call(t *testing.T, h http.Handler, method, path, user, payload string) (int
 	if user != "" {
 		req.Header.Set("X-Test-User", user)
 	}
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set("X-CSRF-Token", csrfToken(t, h))
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var m map[string]any
@@ -134,6 +137,19 @@ func call(t *testing.T, h http.Handler, method, path, user, payload string) (int
 		_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	}
 	return rec.Code, m
+}
+
+func csrfToken(t *testing.T, h http.Handler) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/csrf", nil))
+	var tok struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || tok.CSRF == "" {
+		t.Fatalf("GET /csrf: %d %s (%v)", rec.Code, rec.Body.String(), err)
+	}
+	return tok.CSRF
 }
 
 func TestAPIFlowOnRealDatabase(t *testing.T) {

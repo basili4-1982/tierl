@@ -29,6 +29,7 @@ func (headerAuth) UserID(r *http.Request) (string, bool) {
 type env struct {
 	h     http.Handler
 	store *tierlisttest.MemStore
+	csrf  string
 }
 
 func newEnv(t *testing.T, limit api.Middleware) env {
@@ -48,7 +49,17 @@ func newEnv(t *testing.T, limit api.Middleware) env {
 		Log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 		CreateTierlistLimit: limit,
 	})
-	return env{h: h, store: store}
+	e := env{h: h, store: store}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.Prefix+"/csrf", nil))
+	var tok struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tok); err != nil || tok.CSRF == "" {
+		t.Fatalf("GET /csrf: %d %s (%v)", rec.Code, rec.Body.String(), err)
+	}
+	e.csrf = tok.CSRF
+	return e
 }
 
 func (e env) do(t *testing.T, method, path, user, body string) *httptest.ResponseRecorder {
@@ -56,6 +67,9 @@ func (e env) do(t *testing.T, method, path, user, body string) *httptest.Respons
 	req := httptest.NewRequest(method, api.Prefix+path, strings.NewReader(body))
 	if user != "" {
 		req.Header.Set("X-Test-User", user)
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set(api.CSRFHeader, e.csrf)
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
@@ -349,6 +363,28 @@ func TestStatusInvalidTransition(t *testing.T) {
 func TestUnknownRoute(t *testing.T) {
 	e := newEnv(t, nil)
 	wantError(t, e.do(t, http.MethodGet, "/nothing", "", ""), 404, "not_found")
+}
+
+func TestCSRFRequired(t *testing.T) {
+	e := newEnv(t, nil)
+	for name, token := range map[string]string{"missing": "", "wrong": "not-a-token"} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, api.Prefix+"/tierlists", strings.NewReader(createBody))
+			req.Header.Set("X-Test-User", "anna")
+			if token != "" {
+				req.Header.Set(api.CSRFHeader, token)
+			}
+			rec := httptest.NewRecorder()
+			e.h.ServeHTTP(rec, req)
+			wantError(t, rec, http.StatusForbidden, "csrf_failed")
+		})
+	}
+	// Safe methods do not need the header.
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.Prefix+"/tierlists/langs", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET without CSRF = %d, want 404", rec.Code)
+	}
 }
 
 func TestBodyTooLarge(t *testing.T) {

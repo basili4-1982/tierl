@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/domain"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
@@ -41,17 +42,25 @@ type Deps struct {
 	Store   tierlist.Store
 	Results ResultProvider
 	Users   tierlist.Users
+	// AuthService and Sessions enable the auth endpoints. Both must be set.
+	AuthService *auth.Service
+	Sessions    *auth.SessionManager
+	// CSRF overrides the process-wide CSRF token source; nil uses the default.
+	CSRF *auth.CSRF
 }
 
 // API is the HTTP handler of the JSON API.
 type API struct {
-	tierlists *tierlist.Service
-	auth      Authenticator
-	log       *slog.Logger
-	mux       *http.ServeMux
-	store     tierlist.Store
-	results   ResultProvider
-	users     tierlist.Users
+	tierlists   *tierlist.Service
+	auth        Authenticator
+	log         *slog.Logger
+	mux         *http.ServeMux
+	store       tierlist.Store
+	results     ResultProvider
+	users       tierlist.Users
+	authService *auth.Service
+	sessions    *auth.SessionManager
+	csrf        *auth.CSRF
 }
 
 // New builds the handler with all routes registered under Prefix.
@@ -59,14 +68,28 @@ func New(d Deps) *API {
 	a := &API{
 		tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux(),
 		store: d.Store, results: d.Results, users: d.Users,
+		authService: d.AuthService, sessions: d.Sessions, csrf: d.CSRF,
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if a.csrf == nil {
+		a.csrf = auth.NewCSRF(nil)
 	}
 
 	create := http.Handler(http.HandlerFunc(a.createTierlist))
 	if d.CreateTierlistLimit != nil {
 		create = d.CreateTierlistLimit(create)
+	}
+	a.mux.HandleFunc("GET "+Prefix+"/csrf", a.getCSRF)
+	if a.authService != nil && a.sessions != nil {
+		a.mux.HandleFunc("POST "+Prefix+"/auth/register", a.register)
+		a.mux.HandleFunc("POST "+Prefix+"/auth/login", a.login)
+		a.mux.HandleFunc("POST "+Prefix+"/auth/logout", a.logout)
+		a.mux.HandleFunc("POST "+Prefix+"/auth/logout-all", a.logoutAll)
+		a.mux.HandleFunc("POST "+Prefix+"/auth/change-password", a.changePassword)
+		a.mux.HandleFunc("PATCH "+Prefix+"/auth/password", a.changePassword)
+		a.mux.HandleFunc("GET "+Prefix+"/auth/me", a.me)
 	}
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
@@ -80,8 +103,15 @@ func New(d Deps) *API {
 	return a
 }
 
-// ServeHTTP implements http.Handler.
-func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.mux.ServeHTTP(w, r) }
+// ServeHTTP implements http.Handler. Every unsafe request must carry a valid
+// X-CSRF-Token header before it reaches a handler.
+func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if isUnsafeMethod(r.Method) && !a.csrf.Valid(r.Header.Get(CSRFHeader)) {
+		writeError(w, http.StatusForbidden, "csrf_failed", "Неверный CSRF-токен", nil)
+		return
+	}
+	a.mux.ServeHTTP(w, r)
+}
 
 // errorBody is the Error schema of the contract.
 type errorBody struct {
