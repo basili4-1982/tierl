@@ -1,14 +1,34 @@
+# Local / self-host stack. Copy .env.example to .env to override the defaults.
+# The app waits for PostgreSQL, applies migrations and serves UI + API on :8080.
 services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      # Bound to loopback by default; put a TLS reverse proxy in front.
+      - "127.0.0.1:${TIERL_PORT:-8080}:8080"
     environment:
       TIERL_HTTP_ADDR: ":8080"
-      TIERL_DATABASE_URL: "postgres://tierl:tierl@postgres:5432/tierl?sslmode=disable"
-      TIERL_MIGRATE_ON_START: "true"
-      # Dev-only salt; use a random secret outside local development.
-      TIERL_IP_HASH_SALT: "dev-only-ip-hash-salt-change-me"
+      # Built from POSTGRES_* so changing the password in .env stays consistent.
+      TIERL_DATABASE_URL: "postgres://${POSTGRES_USER:-tierl}:${POSTGRES_PASSWORD:-tierl}@postgres:5432/${POSTGRES_DB:-tierl}?sslmode=disable"
+      TIERL_MIGRATE_ON_START: "${TIERL_MIGRATE_ON_START:-true}"
+      TIERL_LOG_LEVEL: "${TIERL_LOG_LEVEL:-info}"
+      TIERL_SHUTDOWN_TIMEOUT: "${TIERL_SHUTDOWN_TIMEOUT:-10s}"
+      # Dev-only salt; set a random secret (openssl rand -hex 32) outside local use.
+      TIERL_IP_HASH_SALT: "${TIERL_IP_HASH_SALT:-dev-only-ip-hash-salt-change-me}"
+      TIERL_ARGON2_MEMORY_KIB: "${TIERL_ARGON2_MEMORY_KIB:-65536}"
+      TIERL_ARGON2_ITERATIONS: "${TIERL_ARGON2_ITERATIONS:-3}"
+      TIERL_ARGON2_PARALLELISM: "${TIERL_ARGON2_PARALLELISM:-2}"
+      TIERL_RATELIMIT_CREATE_TIERLIST_BURST: "${TIERL_RATELIMIT_CREATE_TIERLIST_BURST:-10}"
+      TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL: "${TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL:-30s}"
+      TIERL_STORAGE_TYPE: "${TIERL_STORAGE_TYPE:-fs}"
+      TIERL_STORAGE_FS_PATH: "${TIERL_STORAGE_FS_PATH:-./data/media}"
+      TIERL_STORAGE_PUBLIC_URL: "${TIERL_STORAGE_PUBLIC_URL:-/media}"
+      TIERL_S3_ENDPOINT: "${TIERL_S3_ENDPOINT:-}"
+      TIERL_S3_BUCKET: "${TIERL_S3_BUCKET:-}"
+      TIERL_S3_ACCESS_KEY: "${TIERL_S3_ACCESS_KEY:-}"
+      TIERL_S3_SECRET_KEY: "${TIERL_S3_SECRET_KEY:-}"
+      TIERL_S3_REGION: "${TIERL_S3_REGION:-}"
+      TIERL_S3_USE_SSL: "${TIERL_S3_USE_SSL:-false}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -16,34 +36,38 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: tierl
-      POSTGRES_PASSWORD: tierl
-      POSTGRES_DB: tierl
+      POSTGRES_USER: "${POSTGRES_USER:-tierl}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-tierl}"
+      POSTGRES_DB: "${POSTGRES_DB:-tierl}"
     ports:
-      - "5432:5432"
+      # Only for host tools (make migrate-up, psql); not exposed publicly.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tierl -d tierl"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s
       timeout: 3s
       retries: 10
 
+  # Optional development tools: docker compose --profile tools up -d
   mailpit:
     image: axllent/mailpit:latest
+    profiles: ["tools"]
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
 
   minio:
     image: cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880
+    profiles: ["tools"]
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: tierl
-      MINIO_ROOT_PASSWORD: tierl-secret
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-tierl}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-tierl-secret}"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - miniodata:/data
 
