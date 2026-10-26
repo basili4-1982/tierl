@@ -1,4 +1,4 @@
-.PHONY: migrate-up migrate-down web-install web-build web-test fmt lint vet test cover build run up down
+.PHONY: migrate-up migrate-down web-install web-build web-test fmt lint vet test cover build build-migrate run up down ps logs health
 
 COVER_MIN ?= 80
 
@@ -21,6 +21,9 @@ cover:
 build:
 	CGO_ENABLED=0 go build -o bin/tierl ./cmd/tierl
 
+build-migrate:
+	CGO_ENABLED=0 go build -o bin/migrate ./cmd/migrate
+
 run:
 	go run ./cmd/tierl
 
@@ -38,6 +41,16 @@ up:
 
 down:
 	docker compose down
+
+ps:
+	docker compose ps
+
+logs:
+	docker compose logs -f app
+
+health:
+	curl -fsS http://localhost:$${TIERL_PORT:-8080}/healthz && echo
+	curl -fsS http://localhost:$${TIERL_PORT:-8080}/readyz && echo
 
 web-install:
 	cd web && npm ci
