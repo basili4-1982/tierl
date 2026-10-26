@@ -36,6 +36,11 @@ type Deps struct {
 	Log       *slog.Logger
 	// CreateTierlistLimit wraps POST /tierlists; nil means no extra middleware.
 	CreateTierlistLimit Middleware
+	// Store and Results are optional; they let the share pages and OG images
+	// resolve tier lists and participant results. Production wires both.
+	Store   tierlist.Store
+	Results ResultProvider
+	Users   tierlist.Users
 }
 
 // API is the HTTP handler of the JSON API.
@@ -44,11 +49,17 @@ type API struct {
 	auth      Authenticator
 	log       *slog.Logger
 	mux       *http.ServeMux
+	store     tierlist.Store
+	results   ResultProvider
+	users     tierlist.Users
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
-	a := &API{tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux()}
+	a := &API{
+		tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux(),
+		store: d.Store, results: d.Results, users: d.Users,
+	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -62,6 +73,7 @@ func New(d Deps) *API {
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+	a.mountShareRoutes()
 	a.mux.HandleFunc(Prefix+"/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	})

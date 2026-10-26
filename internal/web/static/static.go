@@ -21,8 +21,28 @@ func FS() fs.FS {
 	return sub
 }
 
+// Index returns the SPA document from fsys.
+func Index(fsys fs.FS) ([]byte, error) {
+	return fs.ReadFile(fsys, "index.html")
+}
+
+// InjectHead inserts markup right before the closing head tag. If the document
+// has no head, the markup is prepended. It never removes existing tags, so the
+// SPA boot script keeps working.
+func InjectHead(doc []byte, markup string) []byte {
+	lower := strings.ToLower(string(doc))
+	if i := strings.LastIndex(lower, "</head>"); i >= 0 {
+		out := make([]byte, 0, len(doc)+len(markup))
+		out = append(out, doc[:i]...)
+		out = append(out, markup...)
+		out = append(out, doc[i:]...)
+		return out
+	}
+	return append([]byte(markup), doc...)
+}
+
 // reserved are URL prefixes owned by the server, never by the SPA.
-var reserved = []string{"/api", "/healthz"}
+var reserved = []string{"/api", "/healthz", "/og"}
 
 // Handler serves files from fsys. Unknown paths without a file extension fall
 // back to index.html so that client-side routes work. Reserved server prefixes

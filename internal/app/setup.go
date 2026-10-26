@@ -52,11 +52,15 @@ func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, auth api.A
 	if err != nil {
 		return web.Deps{}, fmt.Errorf("rate limiter: %w", err)
 	}
-	service := tierlist.NewService(postgres.New(pool), users, tierlist.ServiceDeps{})
+	store := postgres.New(pool)
+	service := tierlist.NewService(store, users, tierlist.ServiceDeps{})
 	handler := api.New(api.Deps{
 		Tierlists: service,
 		Auth:      auth,
 		Log:       log,
+		Store:     store,
+		Results:   ogResultReader{pool: pool, store: store, users: users},
+		Users:     users,
 		CreateTierlistLimit: ratelimit.Middleware(limiter,
 			ratelimit.IPKey([]byte(cfg.IPHashSalt), "create_tierlist")),
 	})

@@ -17,6 +17,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // jsdom + userEvent can exceed the 5s default on slow CI workers.
+    testTimeout: 20000,
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',

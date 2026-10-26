@@ -27,6 +27,12 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /readyz", readyz(d.Ready))
 	if d.API != nil {
 		mux.Handle(api.Prefix+"/", d.API)
+		if share, ok := d.API.(interface{ ShareHandler() http.Handler }); ok {
+			h := share.ShareHandler()
+			mux.Handle("/t/", h)
+			mux.Handle("/r/", h)
+			mux.Handle("/og/", h)
+		}
 	}
 	mux.Handle("/", static.Handler(static.FS()))
 	return mux
