@@ -1,6 +1,6 @@
 // Package auth implements users, registration and login with argon2id
 // password hashes (ADR-003). Sessions, email confirmation and password reset
-// live elsewhere. The storage interface is declared here, on the consumer
+// live here too. The storage interface is declared here, on the consumer
 // side; internal/storage/postgres implements it.
 package auth
 
@@ -10,7 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/basili4-1982/tierl/internal/platform/mailer"
 )
 
 // User is an account.
@@ -36,6 +40,13 @@ type Users interface {
 	UpdatePasswordHash(ctx context.Context, id, hash string, now time.Time) error
 }
 
+// EmailMarker is implemented by user stores that can confirm an address.
+// It is optional so existing Users implementations keep working.
+type EmailMarker interface {
+	// MarkEmailVerified sets email_verified and updated_at or returns ErrUserNotFound.
+	MarkEmailVerified(ctx context.Context, id string, now time.Time) error
+}
+
 // Options configure a Service. Zero values select safe defaults.
 type Options struct {
 	// Hash holds the argon2id parameters; the zero value means DefaultHashParams.
@@ -44,17 +55,36 @@ type Options struct {
 	Now func() time.Time
 	// Rand is the entropy source for IDs and salts; default crypto/rand.
 	Rand io.Reader
-	// Sessions, when set, lets ChangePassword revoke every session of a user.
-	Sessions SessionRevoker
+	// Tokens stores one-time email tokens. Without it the email confirmation
+	// and password reset methods return ErrNotConfigured.
+	Tokens TokenStore
+	// Mail delivers letter templates. Nil disables sending; Register still
+	// succeeds, but nothing is delivered.
+	Mail Mailer
+	// Sessions revokes every session of a user after a password reset. It
+	// accepts either a SessionManager (DeleteByUserID) or a LogoutAll revoker.
+	Sessions any
+	// BaseURL is the public origin used in email links; default
+	// http://localhost:8080.
+	BaseURL string
+	// Lang is the letter language; default Russian.
+	Lang mailer.Lang
+	// Log receives delivery failures. Tokens and links are never logged.
+	Log *slog.Logger
 }
 
 // Service registers and authenticates users.
 type Service struct {
 	users    Users
-	sessions SessionRevoker
 	hasher   *Hasher
 	now      func() time.Time
 	rand     io.Reader
+	tokens   TokenStore
+	mail     Mailer
+	sessions any
+	baseURL  string
+	lang     mailer.Lang
+	log      *slog.Logger
 	// dummyHash is verified when the email is unknown, so that response time
 	// does not reveal whether the account exists.
 	dummyHash string
@@ -71,6 +101,16 @@ func NewService(users Users, opts Options) (*Service, error) {
 	if opts.Rand == nil {
 		opts.Rand = rand.Reader
 	}
+	if opts.BaseURL == "" {
+		opts.BaseURL = "http://localhost:8080"
+	}
+	opts.BaseURL = strings.TrimRight(opts.BaseURL, "/")
+	if opts.Lang == "" {
+		opts.Lang = mailer.LangRU
+	}
+	if opts.Log == nil {
+		opts.Log = slog.New(slog.DiscardHandler)
+	}
 	h, err := NewHasher(opts.Hash)
 	if err != nil {
 		return nil, err
@@ -80,7 +120,12 @@ func NewService(users Users, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("auth: dummy hash: %w", err)
 	}
-	return &Service{users: users, sessions: opts.Sessions, hasher: h, now: opts.Now, rand: opts.Rand, dummyHash: dummy}, nil
+	return &Service{
+		users: users, hasher: h, now: opts.Now, rand: opts.Rand,
+		tokens: opts.Tokens, mail: opts.Mail, sessions: opts.Sessions,
+		baseURL: opts.BaseURL, lang: opts.Lang, log: opts.Log,
+		dummyHash: dummy,
+	}, nil
 }
 
 // RegisterInput is the data of a new account.
@@ -117,6 +162,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 	if err := s.users.Create(ctx, u); err != nil {
 		return nil, fmt.Errorf("auth: register: %w", err)
 	}
+	s.notifyVerification(ctx, u)
 	return u, nil
 }
 
@@ -213,25 +259,26 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	return nil
 }
 
-// ResetPassword sets a new password without checking the old one (for the
-// email reset flow) and revokes every session of the user.
-func (s *Service) ResetPassword(ctx context.Context, userID, newPassword string) error {
+// SetPassword sets a new password without checking the old one and revokes
+// every session of the user. It is kept for administrative callers; the email
+// reset flow is ResetPassword(ctx, token, newPassword).
+func (s *Service) SetPassword(ctx context.Context, userID, newPassword string) error {
 	if err := ValidatePassword(newPassword); err != nil {
 		return err
 	}
 	hash, err := s.hasher.Hash(newPassword)
 	if err != nil {
-		return fmt.Errorf("auth: reset password: %w", err)
+		return fmt.Errorf("auth: set password: %w", err)
 	}
 	if err := s.storePassword(ctx, userID, hash); err != nil {
-		return fmt.Errorf("auth: reset password: %w", err)
+		return fmt.Errorf("auth: set password: %w", err)
 	}
 	return nil
 }
 
-// SetPassword is an alias for ResetPassword.
-func (s *Service) SetPassword(ctx context.Context, userID, newPassword string) error {
-	return s.ResetPassword(ctx, userID, newPassword)
+// ResetPasswordForUser is an alias for SetPassword.
+func (s *Service) ResetPasswordForUser(ctx context.Context, userID, newPassword string) error {
+	return s.SetPassword(ctx, userID, newPassword)
 }
 
 func (s *Service) storePassword(ctx context.Context, userID, hash string) error {
@@ -239,10 +286,28 @@ func (s *Service) storePassword(ctx context.Context, userID, hash string) error 
 	if err := s.users.UpdatePasswordHash(ctx, userID, hash, now); err != nil {
 		return err
 	}
-	if s.sessions != nil {
-		if err := s.sessions.DeleteByUserID(ctx, userID); err != nil {
-			return fmt.Errorf("revoke sessions: %w", err)
-		}
+	if err := s.revokeSessions(ctx, userID); err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
 	}
 	return nil
+}
+
+// revokeSessions supports both the session manager's DeleteByUserID and the
+// LogoutAll signature used by the email reset flow.
+func (s *Service) revokeSessions(ctx context.Context, userID string) error {
+	switch r := s.sessions.(type) {
+	case nil:
+		return nil
+	case interface {
+		LogoutAll(ctx context.Context, userID string) (int64, error)
+	}:
+		_, err := r.LogoutAll(ctx, userID)
+		return err
+	case interface {
+		DeleteByUserID(ctx context.Context, userID string) error
+	}:
+		return r.DeleteByUserID(ctx, userID)
+	default:
+		return errors.New("auth: unsupported session revoker")
+	}
 }

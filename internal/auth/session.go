@@ -151,6 +151,16 @@ func (m *SessionManager) DeleteAll(ctx context.Context, userID string) error {
 	return nil
 }
 
+// LogoutAll closes every session of the user and satisfies the revoker shape
+// used by the email reset flow. The session store does not report a count, so
+// the result is always zero.
+func (m *SessionManager) LogoutAll(ctx context.Context, userID string) (int64, error) {
+	if err := m.DeleteAll(ctx, userID); err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
+
 // DeleteExpired removes expired sessions.
 func (m *SessionManager) DeleteExpired(ctx context.Context) error {
 	if err := m.sessions.DeleteExpired(ctx, m.now().UTC()); err != nil {

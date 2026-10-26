@@ -12,6 +12,7 @@ import (
 
 	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/domain"
+	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
 
@@ -35,8 +36,22 @@ type Deps struct {
 	Tierlists *tierlist.Service
 	Auth      Authenticator
 	Log       *slog.Logger
+	// Accounts serves the email confirmation and password reset endpoints;
+	// nil leaves them unregistered (for example without a database).
+	Accounts Accounts
 	// CreateTierlistLimit wraps POST /tierlists; nil means no extra middleware.
 	CreateTierlistLimit Middleware
+	// ResendVerificationLimit wraps POST /auth/resend-verification.
+	ResendVerificationLimit Middleware
+	// ForgotPasswordLimit wraps POST /auth/forgot-password.
+	ForgotPasswordLimit Middleware
+	// VerifyEmailLimit wraps POST /auth/verify-email.
+	VerifyEmailLimit Middleware
+	// ResetPasswordLimit wraps POST /auth/reset-password.
+	ResetPasswordLimit Middleware
+	// EmailLimiter limits forgot/resend by the email in the body; the IP
+	// middleware above still applies. Nil disables the per-email dimension.
+	EmailLimiter ratelimit.Limiter
 	// Store and Results are optional; they let the share pages and OG images
 	// resolve tier lists and participant results. Production wires both.
 	Store   tierlist.Store
@@ -51,22 +66,25 @@ type Deps struct {
 
 // API is the HTTP handler of the JSON API.
 type API struct {
-	tierlists   *tierlist.Service
-	auth        Authenticator
-	log         *slog.Logger
-	mux         *http.ServeMux
-	store       tierlist.Store
-	results     ResultProvider
-	users       tierlist.Users
-	authService *auth.Service
-	sessions    *auth.SessionManager
-	csrf        *auth.CSRF
+	tierlists    *tierlist.Service
+	auth         Authenticator
+	accounts     Accounts
+	emailLimiter ratelimit.Limiter
+	log          *slog.Logger
+	mux          *http.ServeMux
+	store        tierlist.Store
+	results      ResultProvider
+	users        tierlist.Users
+	authService  *auth.Service
+	sessions     *auth.SessionManager
+	csrf         *auth.CSRF
 }
 
 // New builds the handler with all routes registered under Prefix.
 func New(d Deps) *API {
 	a := &API{
-		tierlists: d.Tierlists, auth: d.Auth, log: d.Log, mux: http.NewServeMux(),
+		tierlists: d.Tierlists, auth: d.Auth, accounts: d.Accounts,
+		emailLimiter: d.EmailLimiter, log: d.Log, mux: http.NewServeMux(),
 		store: d.Store, results: d.Results, users: d.Users,
 		authService: d.AuthService, sessions: d.Sessions, csrf: d.CSRF,
 	}
@@ -91,6 +109,16 @@ func New(d Deps) *API {
 		a.mux.HandleFunc("PATCH "+Prefix+"/auth/password", a.changePassword)
 		a.mux.HandleFunc("GET "+Prefix+"/auth/me", a.me)
 	}
+	if a.accounts != nil {
+		a.mux.Handle("POST "+Prefix+"/auth/verify-email",
+			withMiddleware(http.HandlerFunc(a.verifyEmail), d.VerifyEmailLimit))
+		a.mux.Handle("POST "+Prefix+"/auth/reset-password",
+			withMiddleware(http.HandlerFunc(a.resetPassword), d.ResetPasswordLimit))
+		a.mux.Handle("POST "+Prefix+"/auth/resend-verification",
+			withMiddleware(http.HandlerFunc(a.resendVerification), d.ResendVerificationLimit))
+		a.mux.Handle("POST "+Prefix+"/auth/forgot-password",
+			withMiddleware(http.HandlerFunc(a.forgotPassword), d.ForgotPasswordLimit))
+	}
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
@@ -103,14 +131,39 @@ func New(d Deps) *API {
 	return a
 }
 
+// withMiddleware wraps h when mw is not nil.
+func withMiddleware(h http.Handler, mw Middleware) http.Handler {
+	if mw == nil {
+		return h
+	}
+	return mw(h)
+}
+
 // ServeHTTP implements http.Handler. Every unsafe request must carry a valid
 // X-CSRF-Token header before it reaches a handler.
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if isUnsafeMethod(r.Method) && !a.csrf.Valid(r.Header.Get(CSRFHeader)) {
+	if isUnsafeMethod(r.Method) && !a.csrf.Valid(r.Header.Get(CSRFHeader)) && !a.accountsOnlyEmailRequest(r) {
 		writeError(w, http.StatusForbidden, "csrf_failed", "Неверный CSRF-токен", nil)
 		return
 	}
 	a.mux.ServeHTTP(w, r)
+}
+
+// accountsOnlyEmailRequest keeps the email endpoints usable in a build that
+// wires only an Accounts implementation (no browser session and no CSRF
+// source). The production setup always configures sessions, so the full API
+// keeps enforcing CSRF for every unsafe request.
+func (a *API) accountsOnlyEmailRequest(r *http.Request) bool {
+	if a.authService != nil || a.sessions != nil {
+		return false
+	}
+	switch r.URL.Path {
+	case Prefix + "/auth/verify-email", Prefix + "/auth/resend-verification",
+		Prefix + "/auth/forgot-password", Prefix + "/auth/reset-password":
+		return true
+	default:
+		return false
+	}
 }
 
 // errorBody is the Error schema of the contract.

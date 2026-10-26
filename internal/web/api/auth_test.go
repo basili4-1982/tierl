@@ -74,6 +74,20 @@ func (u *authUsers) UpdatePasswordHash(_ context.Context, id, hash string, now t
 	return nil
 }
 
+func (u *authUsers) MarkEmailVerified(_ context.Context, id string, now time.Time) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	x, ok := u.byID[id]
+	if !ok {
+		return auth.ErrUserNotFound
+	}
+	x.EmailVerified, x.UpdatedAt = true, now
+	if y := u.email[x.Email]; y != nil {
+		y.EmailVerified, y.UpdatedAt = true, now
+	}
+	return nil
+}
+
 type authSessions struct {
 	mu   sync.Mutex
 	rows map[string]*auth.Session
