@@ -41,11 +41,12 @@ func (s *Store) Save(ctx context.Context, sub tierlist.Submission, now time.Time
 		}
 
 		// The conflict update locks an existing row, so concurrent saves of
-		// one session serialize. xmax <> 0 marks the update path.
+		// one session serialize. xmax <> 0 marks the update path. updated_at
+		// never moves backwards, even if a caller supplies an older timestamp.
 		err = tx.QueryRow(ctx, `
 			INSERT INTO submissions (id, tierlist_id, session_id, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $4)
-			ON CONFLICT (tierlist_id, session_id) DO UPDATE SET updated_at = GREATEST(EXCLUDED.updated_at, submissions.created_at)
+			ON CONFLICT (tierlist_id, session_id) DO UPDATE SET updated_at = GREATEST(EXCLUDED.updated_at, submissions.updated_at)
 			RETURNING id, xmax <> 0`,
 			sub.ID, sub.TierlistID, sub.SessionID, now).Scan(&res.SubmissionID, &res.Replaced)
 		if err != nil {

@@ -59,13 +59,23 @@ func toSubmissionDTO(d *tierlist.SubmissionDetails) submissionDTO {
 	}
 }
 
-func (a *API) createSubmission(w http.ResponseWriter, r *http.Request) {
+// decodeSubmission reads the body and enforces the contract's minItems: 3
+// before a session cookie is issued or any answer is written.
+func decodeSubmission(w http.ResponseWriter, r *http.Request) (submissionRequest, bool) {
 	var req submissionRequest
 	if !decode(w, r, &req) {
-		return
+		return req, false
 	}
 	if len(req.Placements) < tierlist.MinPlacements {
 		writeError(w, http.StatusBadRequest, "bad_request", "Нужно разместить минимум 3 элемента", nil)
+		return req, false
+	}
+	return req, true
+}
+
+func (a *API) createSubmission(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeSubmission(w, r)
+	if !ok {
 		return
 	}
 	sessionID, ok := a.anonSession(w, r, true)
@@ -85,12 +95,8 @@ func (a *API) createSubmission(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) replaceSubmission(w http.ResponseWriter, r *http.Request) {
-	var req submissionRequest
-	if !decode(w, r, &req) {
-		return
-	}
-	if len(req.Placements) < tierlist.MinPlacements {
-		writeError(w, http.StatusBadRequest, "bad_request", "Нужно разместить минимум 3 элемента", nil)
+	req, ok := decodeSubmission(w, r)
+	if !ok {
 		return
 	}
 	sessionID, ok := a.anonSession(w, r, true)

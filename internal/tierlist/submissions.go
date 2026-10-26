@@ -15,6 +15,10 @@ import (
 // MinPlacements is the minimal number of items a participant must place.
 const MinPlacements = domain.MinItems
 
+// MinSubmissions is the minimal number of answers a survey needs before result
+// statistics are shown. Below it the result is marked as insufficient data.
+const MinSubmissions = similarity.DefaultMinAnswers
+
 // ErrAlreadySubmitted is returned when a session posts a second answer.
 var ErrAlreadySubmitted = errors.New("tierlist: already submitted")
 
@@ -91,22 +95,35 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput, replace bool) (*Su
 		return nil, ErrNotAcceptingSubmissions
 	}
 
-	if !replace && s.lookup != nil {
-		existing, err := s.lookup.SubmissionBySession(ctx, t.ID, in.SessionID)
+	// A session has at most one answer per tier list. Looking it up before
+	// writing makes POST idempotent (409 instead of silently replacing) and
+	// lets PUT reuse the existing result ID.
+	var existing *SubmissionRecord
+	if s.lookup != nil {
+		found, err := s.lookup.SubmissionBySession(ctx, t.ID, in.SessionID)
 		switch {
 		case err == nil:
-			return nil, &AlreadySubmittedError{ResultID: existing.ID}
+			existing = found
 		case !errors.Is(err, ErrNotFound):
 			return nil, err
 		}
+	}
+	if existing != nil && !replace {
+		return nil, &AlreadySubmittedError{ResultID: existing.ID}
 	}
 	if err := validatePlacements(t, in.Placements); err != nil {
 		return nil, err
 	}
 
-	id, err := s.newID()
-	if err != nil {
-		return nil, err
+	id := ""
+	if existing != nil {
+		id = existing.ID
+	} else {
+		var err error
+		id, err = s.newID()
+		if err != nil {
+			return nil, err
+		}
 	}
 	now := s.now().UTC()
 	res, err := s.answers.Save(ctx, Submission{
@@ -312,7 +329,7 @@ func (s *Service) Stats(ctx context.Context, id string) (*ResultStats, error) {
 	stats := &ResultStats{
 		TotalSubmissions:    len(all),
 		InsufficientData:    think.NotEnoughData,
-		MinSubmissions:      opts.MinAnswers,
+		MinSubmissions:      MinSubmissions,
 		SimilarityThreshold: opts.Threshold,
 		Items:               make([]ItemStats, 0, len(dists)),
 		Similar:             make([]SimilarResult, 0, 5),

@@ -269,7 +269,7 @@ func (m *MemStore) Save(_ context.Context, sub tierlist.Submission, now time.Tim
 	now = now.UTC()
 	if existing != nil {
 		existing.Placements = append([]tierlist.Placement(nil), sub.Placements...)
-		if now.After(existing.CreatedAt) {
+		if now.After(existing.UpdatedAt) {
 			existing.UpdatedAt = now
 		}
 		return tierlist.SaveResult{SubmissionID: existing.ID, Replaced: true}, nil

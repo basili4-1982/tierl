@@ -61,12 +61,10 @@ func (a *API) getResult(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *API) getResultStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := a.tierlists.Stats(r.Context(), r.PathValue("id"))
-	if err != nil {
-		a.writeServiceError(w, r, err)
-		return
-	}
+// toResultStatsDTO maps the anonymous service statistics to the wire format.
+// It deliberately copies only public aggregate fields: session and user
+// identifiers never enter the response.
+func toResultStatsDTO(stats *tierlist.ResultStats) resultStatsDTO {
 	out := resultStatsDTO{
 		TotalSubmissions:    stats.TotalSubmissions,
 		InsufficientData:    stats.InsufficientData,
@@ -78,9 +76,15 @@ func (a *API) getResultStats(w http.ResponseWriter, r *http.Request) {
 		Dissimilar:          make([]similarResultDTO, 0, len(stats.Dissimilar)),
 	}
 	for _, item := range stats.Items {
-		dto := itemDistributionDTO{ItemID: item.ItemID, Label: item.Label, Distribution: make([]tierCountDTO, 0, len(item.Distribution))}
+		dto := itemDistributionDTO{
+			ItemID:       item.ItemID,
+			Label:        item.Label,
+			Distribution: make([]tierCountDTO, 0, len(item.Distribution)),
+		}
 		for _, tier := range item.Distribution {
-			dto.Distribution = append(dto.Distribution, tierCountDTO{TierID: tier.TierID, Count: tier.Count, Percent: tier.Percent})
+			dto.Distribution = append(dto.Distribution, tierCountDTO{
+				TierID: tier.TierID, Count: tier.Count, Percent: tier.Percent,
+			})
 		}
 		out.Items = append(out.Items, dto)
 	}
@@ -90,5 +94,14 @@ func (a *API) getResultStats(w http.ResponseWriter, r *http.Request) {
 	for _, item := range stats.Dissimilar {
 		out.Dissimilar = append(out.Dissimilar, similarResultDTO{ResultID: item.ResultID, Similarity: item.Similarity})
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out
+}
+
+func (a *API) getResultStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := a.tierlists.Stats(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toResultStatsDTO(stats))
 }
