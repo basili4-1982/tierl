@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/platform/config"
+	"github.com/basili4-1982/tierl/internal/platform/mailer"
 	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/storage/postgres"
 	"github.com/basili4-1982/tierl/internal/tierlist"
@@ -35,28 +37,41 @@ func setup(ctx context.Context, cfg config.Config, log *slog.Logger) (web.Deps, 
 		return web.Deps{}, nil, fmt.Errorf("database: %w", err)
 	}
 
-	bundle, err := buildAuth(pool, cfg)
+	bundle, err := buildAuth(pool, cfg, log)
 	if err != nil {
 		pool.Close()
 		return web.Deps{}, nil, err
 	}
 	deps, err := buildDeps(pool, cfg, log, sessionAuth{bundle.sessions}, bundle.users, bundle)
 	if err != nil {
+		bundle.closeMail()
 		pool.Close()
 		return web.Deps{}, nil, err
 	}
-	return deps, pool.Close, nil
+	return deps, func() {
+		bundle.closeMail()
+		pool.Close()
+	}, nil
 }
+
+// mailShutdownTimeout bounds the delivery drain on shutdown.
+const mailShutdownTimeout = 5 * time.Second
 
 // newDeps assembles the API handler on top of an open pool. The supplied
 // authenticator and user directory drive authorization of tier lists; the auth
-// endpoints always use the real Postgres session store.
-func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenticator api.Authenticator, users tierlist.Users) (web.Deps, error) {
-	bundle, err := buildAuth(pool, cfg)
+// endpoints always use the real Postgres session store. The returned func
+// drains the async mail queue and is always safe to call.
+func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenticator api.Authenticator, users tierlist.Users) (web.Deps, func(), error) {
+	bundle, err := buildAuth(pool, cfg, log)
 	if err != nil {
-		return web.Deps{}, err
+		return web.Deps{}, nil, err
 	}
-	return buildDeps(pool, cfg, log, authenticator, users, bundle)
+	deps, err := buildDeps(pool, cfg, log, authenticator, users, bundle)
+	if err != nil {
+		bundle.closeMail()
+		return web.Deps{}, nil, err
+	}
+	return deps, bundle.closeMail, nil
 }
 
 func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenticator api.Authenticator, users tierlist.Users, bundle *authBundle) (web.Deps, error) {
@@ -67,11 +82,19 @@ func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenti
 	if err != nil {
 		return web.Deps{}, fmt.Errorf("rate limiter: %w", err)
 	}
+	emailLimiter, err := ratelimit.NewMemory(ratelimit.Config{
+		Burst:    emailBurst(cfg),
+		Interval: emailInterval(cfg),
+	})
+	if err != nil {
+		return web.Deps{}, fmt.Errorf("email rate limiter: %w", err)
+	}
 	store := postgres.New(pool)
 	service := tierlist.NewService(store, users, tierlist.ServiceDeps{})
 	handler := api.New(api.Deps{
 		Tierlists:   service,
 		Auth:        authenticator,
+		Accounts:    bundle.service,
 		Log:         log,
 		Store:       store,
 		Results:     ogResultReader{pool: pool, store: store, users: users},
@@ -80,19 +103,75 @@ func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenti
 		Sessions:    bundle.sessions,
 		CreateTierlistLimit: ratelimit.Middleware(limiter,
 			ratelimit.IPKey([]byte(cfg.IPHashSalt), "create_tierlist")),
+		ResendVerificationLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "resend_verification")),
+		ForgotPasswordLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "forgot_password")),
+		VerifyEmailLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "verify_email")),
+		ResetPasswordLimit: ratelimit.Middleware(emailLimiter,
+			ratelimit.IPKey([]byte(cfg.IPHashSalt), "reset_password")),
+		EmailLimiter: emailLimiter,
 	})
 	return web.Deps{API: handler, Ready: pool.Ping}, nil
 }
 
-// authBundle wires the auth service, its Postgres session store and the user
-// directory used by tier list author checks.
-type authBundle struct {
-	service  *auth.Service
-	sessions *auth.SessionManager
-	users    authUsers
+// emailBurst and emailInterval apply defaults for configs built directly in
+// tests, without config.Load.
+func emailBurst(cfg config.Config) int {
+	if cfg.AuthEmailBurst > 0 {
+		return cfg.AuthEmailBurst
+	}
+	return 5
 }
 
-func buildAuth(pool *pgxpool.Pool, cfg config.Config) (*authBundle, error) {
+func emailInterval(cfg config.Config) time.Duration {
+	if cfg.AuthEmailInterval > 0 {
+		return cfg.AuthEmailInterval
+	}
+	return time.Minute
+}
+
+// authBundle wires the auth service, its Postgres session store, the one-time
+// token store, the mail queue and the user directory used by tier list author
+// checks.
+type authBundle struct {
+	service   *auth.Service
+	sessions  *auth.SessionManager
+	users     authUsers
+	closeMail func()
+}
+
+func buildAuth(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger) (*authBundle, error) {
+	base, err := mailer.NewSender(mailer.Config{
+		Host:     cfg.Mail.Host,
+		Port:     cfg.Mail.Port,
+		Username: cfg.Mail.Username,
+		Password: cfg.Mail.Password,
+		From:     cfg.Mail.From,
+		TLS:      cfg.Mail.TLS,
+		Timeout:  cfg.Mail.Timeout,
+	}, log)
+	if err != nil {
+		return nil, fmt.Errorf("mailer: %w", err)
+	}
+	mail, err := mailer.NewAsync(base, mailer.AsyncConfig{
+		Workers:   cfg.Mail.Workers,
+		QueueSize: cfg.Mail.QueueSize,
+		Timeout:   cfg.Mail.Timeout,
+	}, log)
+	if err != nil {
+		return nil, fmt.Errorf("mailer queue: %w", err)
+	}
+	closeMail := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), mailShutdownTimeout)
+		defer cancel()
+		if err := mail.Close(ctx); err != nil {
+			log.Warn("mail queue shutdown incomplete", slog.Any("error", err),
+				slog.Uint64("dropped", mail.Stats().Dropped))
+		}
+	}
+
 	userStore := postgres.NewUserStore(pool)
 	sessionStore := postgres.NewSessionStore(pool)
 	sessions := auth.NewSessionManager(sessionStore, auth.SessionOptions{})
@@ -105,11 +184,23 @@ func buildAuth(pool *pgxpool.Pool, cfg config.Config) (*authBundle, error) {
 			Parallelism: cfg.Argon2Parallelism,
 		}
 	}
-	service, err := auth.NewService(userStore, auth.Options{Hash: params, Sessions: sessions})
+	service, err := auth.NewService(userStore, auth.Options{
+		Hash:     params,
+		Sessions: sessions,
+		Tokens:   postgres.NewTokenStore(pool),
+		Mail:     mail,
+		BaseURL:  cfg.AppBaseURL,
+		Lang:     mailer.ParseLang(cfg.Mail.Lang),
+		Log:      log,
+	})
 	if err != nil {
+		closeMail()
 		return nil, fmt.Errorf("auth: %w", err)
 	}
-	return &authBundle{service: service, sessions: sessions, users: authUsers{users: userStore}}, nil
+	return &authBundle{
+		service: service, sessions: sessions,
+		users: authUsers{users: userStore}, closeMail: closeMail,
+	}, nil
 }
 
 // authUsers adapts the auth user directory to tierlist.Users.

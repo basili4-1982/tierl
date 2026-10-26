@@ -79,6 +79,17 @@ func (m *memUsers) UpdatePasswordHash(_ context.Context, id, hash string, now ti
 	return nil
 }
 
+func (m *memUsers) MarkEmailVerified(_ context.Context, id string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	x, ok := m.byID[id]
+	if !ok {
+		return ErrUserNotFound
+	}
+	x.EmailVerified, x.UpdatedAt = true, now
+	return nil
+}
+
 func newSvc(t *testing.T, u Users) *Service {
 	t.Helper()
 	s, err := NewService(u, Options{Hash: fast, Now: func() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC) }})

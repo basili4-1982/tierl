@@ -76,3 +76,15 @@ func (s *UserStore) UpdatePasswordHash(ctx context.Context, id, hash string, now
 	}
 	return nil
 }
+
+// MarkEmailVerified implements auth.EmailMarker.
+func (s *UserStore) MarkEmailVerified(ctx context.Context, id string, now time.Time) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET email_verified = true, updated_at = GREATEST($2, created_at) WHERE id = $1`, id, now)
+	if err != nil {
+		return fmt.Errorf("postgres: mark email verified: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return auth.ErrUserNotFound
+	}
+	return nil
+}

@@ -105,6 +105,9 @@ paths:
       tags: [auth]
       operationId: verifyEmail
       summary: Подтверждение email по токену из письма
+      description: |
+        Токен одноразовый и действует 24 часа. После подтверждения
+        `email_verified` становится `true`.
       security:
         - csrfHeader: []
       requestBody:
@@ -122,6 +125,28 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
               example: { code: invalid_token, message: Ссылка недействительна или устарела }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/resend-verification:
+    post:
+      tags: [auth]
+      operationId: resendVerification
+      summary: Повторная отправка письма подтверждения
+      description: |
+        Ответ всегда `202`, независимо от того, существует ли email и
+        подтверждён ли он. Повторная выдача инвалидирует предыдущую ссылку.
+      security:
+        - csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResendVerificationRequest' }
+            example: { email: anna@example.com }
+      responses:
+        '202': { description: "Если адрес зарегистрирован и не подтверждён, письмо отправлено." }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /auth/login:
     post:
@@ -860,7 +885,12 @@ components:
       type: object
       required: [email]
       properties:
-        email: { type: string, format: email }
+        email: { type: string, format: email, maxLength: 254 }
+    ResendVerificationRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
     ResetPasswordRequest:
       type: object
       required: [token, new_password]

@@ -20,6 +20,12 @@ var (
 	ErrInvalidHash = errors.New("auth: invalid password hash")
 	// ErrRandom is returned when the random source fails.
 	ErrRandom = errors.New("auth: random source failure")
+	// ErrInvalidToken is returned for an unknown, expired or already used
+	// one-time token.
+	ErrInvalidToken = errors.New("auth: invalid or expired token")
+	// ErrNotConfigured is returned by email flows when the service has no
+	// token store or mailer.
+	ErrNotConfigured = errors.New("auth: email flows are not configured")
 )
 
 // ValidationError describes an invalid field. It matches ErrInvalid.

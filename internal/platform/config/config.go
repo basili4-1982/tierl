@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,8 +20,19 @@ const (
 	defaultCreateTierlistBurst    = 10
 	defaultCreateTierlistInterval = 30 * time.Second
 
+	defaultAuthEmailBurst    = 5
+	defaultAuthEmailInterval = time.Minute
+
 	defaultStorageFSPath = "./data/media"
 	defaultStoragePublic = "/media"
+
+	defaultAppBaseURL  = "http://localhost:8080"
+	defaultSMTPPort    = 587
+	defaultSMTPFrom    = "Tierl <no-reply@tierl.local>"
+	defaultSMTPTimeout = 10 * time.Second
+	defaultMailWorkers = 2
+	defaultMailQueue   = 128
+	defaultMailLang    = "ru"
 )
 
 // Config holds all runtime settings of the service.
@@ -44,8 +57,46 @@ type Config struct {
 	// CreateTierlistInterval is the refill time of one creation token
 	// (TIERL_RATELIMIT_CREATE_TIERLIST_INTERVAL, default 30s).
 	CreateTierlistInterval time.Duration
+	// AuthEmailBurst and AuthEmailInterval limit resend-verification and
+	// forgot-password requests per IP (TIERL_RATELIMIT_AUTH_EMAIL_*,
+	// defaults 5 per minute).
+	AuthEmailBurst    int
+	AuthEmailInterval time.Duration
+
+	// AppBaseURL is the public origin of the frontend, used in email links
+	// (TIERL_APP_BASE_URL, default http://localhost:8080).
+	AppBaseURL string
+	// Mail configures transactional email (TIERL_SMTP_*, TIERL_MAIL_*).
+	Mail MailConfig
 
 	Storage StorageConfig
+}
+
+// MailConfig configures transactional email.
+type MailConfig struct {
+	// Host is the SMTP server; empty selects the log sender (TIERL_SMTP_HOST).
+	Host string
+	// Port is the SMTP port (TIERL_SMTP_PORT, default 587).
+	Port int
+	// Username and Password enable PLAIN auth when Username is set
+	// (TIERL_SMTP_USERNAME, TIERL_SMTP_PASSWORD).
+	Username string
+	Password string
+	// From is the envelope sender (TIERL_SMTP_FROM).
+	From string
+	// TLS requires the server to offer STARTTLS; a plaintext fallback is an
+	// error (TIERL_SMTP_TLS, default true).
+	TLS bool
+	// Timeout bounds one delivery (TIERL_SMTP_TIMEOUT, default 10s).
+	Timeout time.Duration
+	// Workers is the number of asynchronous delivery goroutines
+	// (TIERL_MAIL_WORKERS, default 2).
+	Workers int
+	// QueueSize is the buffer between HTTP handlers and workers
+	// (TIERL_MAIL_QUEUE, default 128).
+	QueueSize int
+	// Lang is the letter language: ru (default) or en (TIERL_MAIL_LANG).
+	Lang string
 }
 
 // Storage backends.
@@ -85,6 +136,9 @@ func Load(getenv func(string) string) (Config, error) {
 		IPHashSalt:             getenv("TIERL_IP_HASH_SALT"),
 		CreateTierlistBurst:    defaultCreateTierlistBurst,
 		CreateTierlistInterval: defaultCreateTierlistInterval,
+		AuthEmailBurst:         defaultAuthEmailBurst,
+		AuthEmailInterval:      defaultAuthEmailInterval,
+		AppBaseURL:             strings.TrimRight(valueOr(getenv("TIERL_APP_BASE_URL"), defaultAppBaseURL), "/"),
 	}
 
 	for _, v := range []struct {
@@ -127,6 +181,30 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		cfg.CreateTierlistInterval = d
 	}
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_AUTH_EMAIL_BURST")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_AUTH_EMAIL_BURST: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_AUTH_EMAIL_BURST: must be positive")
+		}
+		cfg.AuthEmailBurst = n
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, errors.New("TIERL_RATELIMIT_AUTH_EMAIL_INTERVAL: must be positive")
+		}
+		cfg.AuthEmailInterval = d
+	}
+
+	if u, err := url.Parse(cfg.AppBaseURL); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return Config{}, fmt.Errorf("TIERL_APP_BASE_URL: %q is not an absolute http(s) URL", cfg.AppBaseURL)
+	}
 
 	if raw := strings.TrimSpace(getenv("TIERL_MIGRATE_ON_START")); raw != "" {
 		b, err := strconv.ParseBool(raw)
@@ -163,7 +241,78 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	cfg.Storage = st
 
+	mailCfg, err := loadMail(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Mail = mailCfg
+
 	return cfg, nil
+}
+
+// loadMail reads the SMTP settings. An empty host is valid: email is then only
+// logged (development mode without a mail server).
+func loadMail(getenv func(string) string) (MailConfig, error) {
+	m := MailConfig{
+		Host:      strings.TrimSpace(getenv("TIERL_SMTP_HOST")),
+		Port:      defaultSMTPPort,
+		Username:  strings.TrimSpace(getenv("TIERL_SMTP_USERNAME")),
+		Password:  getenv("TIERL_SMTP_PASSWORD"),
+		From:      valueOr(getenv("TIERL_SMTP_FROM"), defaultSMTPFrom),
+		TLS:       true,
+		Timeout:   defaultSMTPTimeout,
+		Workers:   defaultMailWorkers,
+		QueueSize: defaultMailQueue,
+		Lang:      strings.ToLower(valueOr(getenv("TIERL_MAIL_LANG"), defaultMailLang)),
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SMTP_PORT")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > 65535 {
+			return MailConfig{}, fmt.Errorf("TIERL_SMTP_PORT: %q is not a port number", raw)
+		}
+		m.Port = n
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SMTP_TLS")); raw != "" {
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return MailConfig{}, fmt.Errorf("TIERL_SMTP_TLS: %w", err)
+		}
+		m.TLS = b
+	}
+	if raw := strings.TrimSpace(getenv("TIERL_SMTP_TIMEOUT")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return MailConfig{}, fmt.Errorf("TIERL_SMTP_TIMEOUT: %w", err)
+		}
+		if d <= 0 {
+			return MailConfig{}, errors.New("TIERL_SMTP_TIMEOUT: must be positive")
+		}
+		m.Timeout = d
+	}
+	for _, v := range []struct {
+		name string
+		dst  *int
+	}{
+		{"TIERL_MAIL_WORKERS", &m.Workers},
+		{"TIERL_MAIL_QUEUE", &m.QueueSize},
+	} {
+		raw := strings.TrimSpace(getenv(v.name))
+		if raw == "" {
+			continue
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return MailConfig{}, fmt.Errorf("%s: must be a positive integer", v.name)
+		}
+		*v.dst = n
+	}
+	if m.Lang != "ru" && m.Lang != "en" {
+		return MailConfig{}, fmt.Errorf("TIERL_MAIL_LANG: %q is not ru or en", m.Lang)
+	}
+	if _, err := mail.ParseAddress(m.From); err != nil {
+		return MailConfig{}, fmt.Errorf("TIERL_SMTP_FROM: %w", err)
+	}
+	return m, nil
 }
 
 func loadStorage(getenv func(string) string) (StorageConfig, error) {
