@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/basili4-1982/tierl/internal/auth"
 	"github.com/basili4-1982/tierl/internal/domain"
+	"github.com/basili4-1982/tierl/internal/media"
 	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
 	"github.com/basili4-1982/tierl/internal/tierlist"
 )
@@ -70,6 +72,14 @@ type Deps struct {
 	// ReportThreshold and ReportsThreshold are aliases.
 	ReportThreshold  int
 	ReportsThreshold int
+	// Media stores item pictures. Nil leaves POST /media unavailable (503).
+	Media media.Storage
+	// ImageStorage and MediaStore are aliases for Media kept for callers that
+	// name the dependency by use.
+	ImageStorage media.Storage
+	MediaStore   media.Storage
+	// MediaLimits overrides media.DefaultLimits; nil uses the defaults.
+	MediaLimits *media.Limits
 }
 
 // API is the HTTP handler of the JSON API.
@@ -86,6 +96,8 @@ type API struct {
 	authService  *auth.Service
 	sessions     *auth.SessionManager
 	csrf         *auth.CSRF
+	media        media.Storage
+	mediaLimits  media.Limits
 }
 
 // New builds the handler with all routes registered under Prefix.
@@ -95,6 +107,16 @@ func New(d Deps) *API {
 		emailLimiter: d.EmailLimiter, log: d.Log, mux: http.NewServeMux(),
 		store: d.Store, results: d.Results, users: d.Users,
 		authService: d.AuthService, sessions: d.Sessions, csrf: d.CSRF,
+		media: d.Media, mediaLimits: media.DefaultLimits(),
+	}
+	if a.media == nil {
+		a.media = d.ImageStorage
+	}
+	if a.media == nil {
+		a.media = d.MediaStore
+	}
+	if d.MediaLimits != nil {
+		a.mediaLimits = *d.MediaLimits
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -141,6 +163,8 @@ func New(d Deps) *API {
 			withMiddleware(http.HandlerFunc(a.forgotPassword), d.ForgotPasswordLimit))
 	}
 	a.mux.Handle("POST "+Prefix+"/tierlists", create)
+	a.mux.HandleFunc("POST "+Prefix+"/media", a.uploadMedia)
+	a.mux.HandleFunc("GET "+Prefix+"/media/{key...}", a.serveMedia)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}", a.getTierlist)
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
@@ -169,6 +193,10 @@ func withMiddleware(h http.Handler, mw Middleware) http.Handler {
 // ServeHTTP implements http.Handler. Every unsafe request must carry a valid
 // X-CSRF-Token header before it reaches a handler.
 func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if base, ok := a.mediaBasePath(); ok && strings.HasPrefix(r.URL.Path, base) {
+		a.serveMedia(w, r)
+		return
+	}
 	if isUnsafeMethod(r.Method) && !a.csrf.Valid(r.Header.Get(CSRFHeader)) && !a.accountsOnlyEmailRequest(r) {
 		writeError(w, http.StatusForbidden, "csrf_failed", "Неверный CSRF-токен", nil)
 		return

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/basili4-1982/tierl/internal/auth"
+	"github.com/basili4-1982/tierl/internal/media"
 	"github.com/basili4-1982/tierl/internal/platform/config"
 	"github.com/basili4-1982/tierl/internal/platform/mailer"
 	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
@@ -49,6 +50,7 @@ func setup(ctx context.Context, cfg config.Config, log *slog.Logger) (web.Deps, 
 		return web.Deps{}, nil, err
 	}
 	return deps, func() {
+		closeMedia(deps)
 		bundle.closeMail()
 		pool.Close()
 	}, nil
@@ -71,7 +73,17 @@ func newDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authentica
 		bundle.closeMail()
 		return web.Deps{}, nil, err
 	}
-	return deps, bundle.closeMail, nil
+	return deps, func() {
+		closeMedia(deps)
+		bundle.closeMail()
+	}, nil
+}
+
+// closeMedia releases a filesystem storage opened by buildDeps.
+func closeMedia(deps web.Deps) {
+	if c, ok := deps.API.(interface{ CloseMedia() error }); ok {
+		_ = c.CloseMedia()
+	}
 }
 
 func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenticator api.Authenticator, users tierlist.Users, bundle *authBundle) (web.Deps, error) {
@@ -91,7 +103,12 @@ func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenti
 	}
 	store := postgres.New(pool)
 	service := tierlist.NewService(store, users, tierlist.ServiceDeps{})
+	imageStorage, err := buildMedia(cfg.Storage)
+	if err != nil {
+		return web.Deps{}, err
+	}
 	handler := api.New(api.Deps{
+		Media:       imageStorage,
 		Tierlists:   service,
 		Auth:        authenticator,
 		Accounts:    bundle.service,
@@ -114,6 +131,47 @@ func buildDeps(pool *pgxpool.Pool, cfg config.Config, log *slog.Logger, authenti
 		EmailLimiter: emailLimiter,
 	})
 	return web.Deps{API: handler, Ready: pool.Ping}, nil
+}
+
+// buildMedia selects the image storage backend from configuration. An empty
+// type leaves media disabled (POST /media answers 503).
+func buildMedia(st config.StorageConfig) (media.Storage, error) {
+	if st.Type == "" {
+		return nil, nil
+	}
+	switch st.Type {
+	case config.StorageFS:
+		dir := st.FSPath
+		if dir == "" {
+			dir = "./data/media"
+		}
+		base := st.PublicURL
+		if base == "" {
+			base = "/media"
+		}
+		fs, err := media.NewFS(dir, base)
+		if err != nil {
+			return nil, fmt.Errorf("media storage: %w", err)
+		}
+		return fs, nil
+	case config.StorageS3:
+		s3, err := media.NewS3(media.S3Options{
+			Endpoint: st.S3Endpoint, Bucket: st.S3Bucket,
+			AccessKey: st.S3AccessKey, SecretKey: st.S3SecretKey,
+			Region: st.S3Region, UseSSL: st.S3UseSSL, PublicURL: st.PublicURL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("media storage: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s3.EnsureBucket(ctx); err != nil {
+			return nil, fmt.Errorf("media storage: %w", err)
+		}
+		return s3, nil
+	default:
+		return nil, fmt.Errorf("media storage: unknown type %q", st.Type)
+	}
 }
 
 // emailBurst and emailInterval apply defaults for configs built directly in

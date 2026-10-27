@@ -35,6 +35,29 @@ export const closeTierlist = (slug: string) =>
   call<Tierlist>('POST', `/tierlists/${enc(slug)}/close`);
 export const deleteTierlist = (slug: string) => call<void>('DELETE', `/tierlists/${enc(slug)}`);
 
+/** Uploads an element picture and returns its public URL. */
+export async function uploadMedia(file: File): Promise<string> {
+  const headers: Record<string, string> = { 'X-CSRF-Token': await getCsrfToken() };
+  const body = new FormData();
+  body.append('file', file);
+  const res = await fetch(`${API_BASE}/media`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body,
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await res.json().catch(() => undefined));
+  }
+  const data = (await res.json()) as { url?: string };
+  if (!data.url) throw new ApiError(500, undefined);
+  return data.url;
+}
+
+/** Aliases kept for callers that name the operation after its result. */
+export const uploadImage = uploadMedia;
+export const uploadItemImage = uploadMedia;
+
 /** Extracts per-field messages from `details.fields` of an API error. */
 export function apiFieldErrors(err: ApiError): Record<string, string> {
   const fields = (err.body?.details as { fields?: unknown } | undefined)?.fields;

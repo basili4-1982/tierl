@@ -161,3 +161,16 @@
   outline: 3px solid #1a73e8;
   outline-offset: 2px;
 }
+.te-image {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.te-image img {
+  width: 4rem;
+  height: 4rem;
+  object-fit: cover;
+  border: 1px solid #888;
+}

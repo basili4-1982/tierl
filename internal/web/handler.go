@@ -33,6 +33,13 @@ func NewHandler(d Deps) http.Handler {
 			mux.Handle("/r/", h)
 			mux.Handle("/og/", h)
 		}
+		if store, ok := d.API.(interface {
+			MediaHandler() (string, http.Handler)
+		}); ok {
+			if path, h := store.MediaHandler(); path != "" && path != "/" && h != nil {
+				mux.Handle(path, h)
+			}
+		}
 	}
 	mux.Handle("/", static.Handler(static.FS()))
 	return mux

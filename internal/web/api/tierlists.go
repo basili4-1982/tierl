@@ -205,6 +205,9 @@ func (a *API) createTierlist(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if !a.validateItemImages(w, userID, req.Items) {
+		return
+	}
 	d, err := a.tierlists.Create(r.Context(), userID, tierlist.CreateInput{
 		Title:       req.Title,
 		Description: req.Description,
@@ -260,12 +263,25 @@ func (a *API) updateTierlist(w http.ResponseWriter, r *http.Request) {
 		in.Tiers = toTierInputs(*req.Tiers)
 	}
 	if req.Items != nil {
+		if !a.validateItemImages(w, userID, *req.Items) {
+			return
+		}
 		in.Items = toItemInputs(*req.Items)
+	}
+
+	var oldItems []domain.Item
+	if req.Items != nil && a.media != nil {
+		if old, err := a.tierlists.Get(r.Context(), userID, r.PathValue("slug")); err == nil {
+			oldItems = old.Tierlist.Items
+		}
 	}
 	d, err := a.tierlists.Update(r.Context(), userID, r.PathValue("slug"), in)
 	if err != nil {
 		a.writeServiceError(w, r, err)
 		return
+	}
+	if req.Items != nil {
+		a.deleteRemovedImages(r.Context(), userID, oldItems, d.Tierlist.Items)
 	}
 	writeJSON(w, http.StatusOK, toTierlistDTO(d))
 }
@@ -288,9 +304,16 @@ func (a *API) deleteTierlist(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var images []string
+	if a.media != nil {
+		if old, err := a.tierlists.Get(r.Context(), userID, r.PathValue("slug")); err == nil {
+			images = itemImageURLs(old.Tierlist.Items)
+		}
+	}
 	if err := a.tierlists.Delete(r.Context(), userID, r.PathValue("slug")); err != nil {
 		a.writeServiceError(w, r, err)
 		return
 	}
+	a.deleteImages(r.Context(), userID, images)
 	w.WriteHeader(http.StatusNoContent)
 }

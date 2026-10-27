@@ -491,16 +491,27 @@ func (s *Service) buildStructure(items []ItemInput, tiers []TierInput) ([]domain
 	return outItems, outTiers, nil
 }
 
-// validateImageURL accepts an empty value or an absolute http(s) URL.
+// validateImageURL accepts an empty value, an absolute http(s) URL, or a
+// root-relative path served by the configured media storage (for example
+// /media/users/<id>/<hash>.png).
 func validateImageURL(raw string) error {
 	if raw == "" {
 		return nil
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return &domain.ValidationError{Field: "item.image_url", Reason: "must be an absolute http or https URL"}
+	if err != nil {
+		return &domain.ValidationError{Field: "item.image_url", Reason: "must be an absolute http(s) URL or a root-relative path"}
 	}
-	return nil
+	if u.Scheme == "http" || u.Scheme == "https" {
+		if u.Host == "" {
+			return &domain.ValidationError{Field: "item.image_url", Reason: "must be an absolute http(s) URL or a root-relative path"}
+		}
+		return nil
+	}
+	if u.Scheme == "" && u.Host == "" && strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//") {
+		return nil
+	}
+	return &domain.ValidationError{Field: "item.image_url", Reason: "must be an absolute http(s) URL or a root-relative path"}
 }
 
 // sameStructure compares the editable content of items and tiers, ignoring IDs.
