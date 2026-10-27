@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 var _ tierlist.OwnerStore = (*Store)(nil)

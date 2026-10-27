@@ -8,9 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/web/api"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/web/api"
 )
 
 // ogResultReader resolves a participant result for server-rendered share

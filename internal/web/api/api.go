@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/basili4-1982/tierl/internal/auth"
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/media"
-	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/media"
+	"code.sarnas.ru/tierl/internal/platform/ratelimit"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // Prefix is the path prefix of every API route (servers.url in the contract).

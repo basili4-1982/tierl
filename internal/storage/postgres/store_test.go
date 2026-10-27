@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/similarity"
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 var t0 = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)

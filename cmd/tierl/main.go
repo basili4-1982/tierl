@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/basili4-1982/tierl/internal/app"
-	"github.com/basili4-1982/tierl/internal/platform/config"
+	"code.sarnas.ru/tierl/internal/app"
+	"code.sarnas.ru/tierl/internal/platform/config"
 )
 
 func main() {

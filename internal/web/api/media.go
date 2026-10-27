@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/media"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/media"
 )
 
 // mediaUploadSlack is the room for multipart headers and boundaries on top of

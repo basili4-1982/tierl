@@ -1,4 +1,4 @@
-module github.com/basili4-1982/tierl
+module code.sarnas.ru/tierl
 
 go 1.25.11
 

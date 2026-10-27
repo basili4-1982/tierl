@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/domain"
 )
 
 // Service errors. Use errors.Is to test for them.

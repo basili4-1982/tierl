@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // PostgreSQL error codes and constraint names we translate to typed errors.

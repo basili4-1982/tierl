@@ -10,7 +10,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
 )
 
 // Integration tests need Docker (Postgres 17 via testcontainers). Without

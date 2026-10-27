@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // reportRequest is the body of POST /tierlists/{slug}/reports. The optional

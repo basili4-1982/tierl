@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // ListPublic implements tierlist.Store with keyset pagination on (created_at, id).

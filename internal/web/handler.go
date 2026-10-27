@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/web/api"
-	"github.com/basili4-1982/tierl/internal/web/static"
+	"code.sarnas.ru/tierl/internal/web/api"
+	"code.sarnas.ru/tierl/internal/web/static"
 )
 
 const readyTimeout = 2 * time.Second

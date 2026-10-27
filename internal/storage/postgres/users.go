@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/basili4-1982/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/auth"
 )
 
 const emailConstraint = "users_email_key"

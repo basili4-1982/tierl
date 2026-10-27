@@ -18,11 +18,11 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/basili4-1982/tierl/internal/platform/config"
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/tierlist/tierlisttest"
-	"github.com/basili4-1982/tierl/internal/web"
+	"code.sarnas.ru/tierl/internal/platform/config"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist/tierlisttest"
+	"code.sarnas.ru/tierl/internal/web"
 )
 
 // Integration tests need Docker (Postgres 17 via testcontainers). Without

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/web/api"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/web/api"
 )
 
 func (e env) doCookie(t *testing.T, method, path, user, body string, cookie *http.Cookie) *httptest.ResponseRecorder {

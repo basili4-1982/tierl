@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/platform/mailer"
+	"code.sarnas.ru/tierl/internal/platform/mailer"
 )
 
 // One-time token lifetimes. Email confirmation is valid for a day; a password

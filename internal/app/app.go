@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/platform/config"
-	"github.com/basili4-1982/tierl/internal/web"
+	"code.sarnas.ru/tierl/internal/platform/config"
+	"code.sarnas.ru/tierl/internal/web"
 )
 
 const (

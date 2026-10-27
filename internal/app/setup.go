@@ -10,15 +10,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/basili4-1982/tierl/internal/auth"
-	"github.com/basili4-1982/tierl/internal/media"
-	"github.com/basili4-1982/tierl/internal/platform/config"
-	"github.com/basili4-1982/tierl/internal/platform/mailer"
-	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/web"
-	"github.com/basili4-1982/tierl/internal/web/api"
+	"code.sarnas.ru/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/media"
+	"code.sarnas.ru/tierl/internal/platform/config"
+	"code.sarnas.ru/tierl/internal/platform/mailer"
+	"code.sarnas.ru/tierl/internal/platform/ratelimit"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/web"
+	"code.sarnas.ru/tierl/internal/web/api"
 )
 
 // setup opens the database and builds the HTTP dependencies. Without

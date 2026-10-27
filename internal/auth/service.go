@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/platform/mailer"
+	"code.sarnas.ru/tierl/internal/platform/mailer"
 )
 
 // User is an account.
