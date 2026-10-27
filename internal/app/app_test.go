@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/platform/config"
+	"code.sarnas.ru/tierl/internal/platform/config"
 )
 
 func TestRun_ServesAndShutsDown(t *testing.T) {

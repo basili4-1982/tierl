@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/auth"
-	"github.com/basili4-1982/tierl/internal/platform/ratelimit"
+	"code.sarnas.ru/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/platform/ratelimit"
 )
 
 // CSRFCookieName is an optional companion cookie. Validation does not depend

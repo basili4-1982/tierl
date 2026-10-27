@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 type resultDTO struct {

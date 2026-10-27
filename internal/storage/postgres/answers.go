@@ -8,9 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/similarity"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // Save implements tierlist.Answers.

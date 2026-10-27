@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/domain"
 )
 
 // DefaultReportHideThreshold is the number of distinct reports after which a

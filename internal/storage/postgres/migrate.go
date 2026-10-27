@@ -9,7 +9,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
-	"github.com/basili4-1982/tierl/migrations"
+	"code.sarnas.ru/tierl/migrations"
 )
 
 // newMigrate builds a migrator for the embedded migrations. url is a regular

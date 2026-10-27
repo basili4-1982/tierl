@@ -5,7 +5,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/basili4-1982/tierl/internal/platform/mailer"
+	"code.sarnas.ru/tierl/internal/platform/mailer"
 )
 
 // Capture records every message it is asked to send. It is safe for

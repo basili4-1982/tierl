@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/media"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/tierlist/tierlisttest"
-	"github.com/basili4-1982/tierl/internal/web/api"
+	"code.sarnas.ru/tierl/internal/media"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist/tierlisttest"
+	"code.sarnas.ru/tierl/internal/web/api"
 )
 
 func newMediaEnv(t *testing.T, lim *media.Limits) (env, *media.FS) {

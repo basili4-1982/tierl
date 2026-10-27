@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/similarity"
 )
 
 // MinPlacements is the minimal number of items a participant must place.

@@ -8,8 +8,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/similarity"
 )
 
 // Storage errors. Use errors.Is to test for them.

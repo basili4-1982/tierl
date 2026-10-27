@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/tierlist/tierlisttest"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist/tierlisttest"
 )
 
 func sample(id, slug string) *domain.Tierlist {

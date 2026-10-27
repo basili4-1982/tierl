@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/similarity"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // MemStore is an in-memory tierlist.Store.

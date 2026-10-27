@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/auth"
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
 )
 
 func TestSessionStore(t *testing.T) {

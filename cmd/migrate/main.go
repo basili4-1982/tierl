@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/basili4-1982/tierl/internal/storage/postgres"
+	"code.sarnas.ru/tierl/internal/storage/postgres"
 )
 
 func main() {

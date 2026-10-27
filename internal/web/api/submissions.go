@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/auth"
-	"github.com/basili4-1982/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/auth"
+	"code.sarnas.ru/tierl/internal/tierlist"
 )
 
 // AnonCookieName is the anonymous participant cookie from ADR-002.

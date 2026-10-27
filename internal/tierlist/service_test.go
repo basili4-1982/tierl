@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/basili4-1982/tierl/internal/domain"
-	"github.com/basili4-1982/tierl/internal/tierlist"
-	"github.com/basili4-1982/tierl/internal/tierlist/tierlisttest"
+	"code.sarnas.ru/tierl/internal/domain"
+	"code.sarnas.ru/tierl/internal/tierlist"
+	"code.sarnas.ru/tierl/internal/tierlist/tierlisttest"
 )
 
 var fixedNow = time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
