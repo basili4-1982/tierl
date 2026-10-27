@@ -20,6 +20,9 @@ type MemStore struct {
 	byID        map[string]domain.Tierlist
 	subs        map[string]int
 	submissions map[string]*memSubmission
+	reports     map[string]map[string]tierlist.Report
+	audit       []tierlist.ModerationAction
+	auditID     int64
 
 	// Errs makes the named method (for example "Create") fail with the error.
 	Errs map[string]error
@@ -37,6 +40,7 @@ func NewMemStore() *MemStore {
 		byID:        map[string]domain.Tierlist{},
 		subs:        map[string]int{},
 		submissions: map[string]*memSubmission{},
+		reports:     map[string]map[string]tierlist.Report{},
 		Errs:        map[string]error{},
 	}
 }
@@ -170,6 +174,8 @@ func (m *MemStore) Delete(_ context.Context, id string) error {
 	}
 	delete(m.byID, id)
 	delete(m.subs, id)
+	delete(m.reports, id)
+	m.audit = slices.DeleteFunc(m.audit, func(a tierlist.ModerationAction) bool { return a.TierlistID == id })
 	for sid, rec := range m.submissions {
 		if rec.TierlistID == id {
 			delete(m.submissions, sid)
@@ -278,12 +284,102 @@ func (m *MemStore) DeleteForOwner(_ context.Context, id, userID string) error {
 	}
 	delete(m.byID, id)
 	delete(m.subs, id)
+	delete(m.reports, id)
+	m.audit = slices.DeleteFunc(m.audit, func(a tierlist.ModerationAction) bool { return a.TierlistID == id })
 	for sid, rec := range m.submissions {
 		if rec.TierlistID == id {
 			delete(m.submissions, sid)
 		}
 	}
 	return nil
+}
+
+// AddReport implements tierlist.ReportStore.
+func (m *MemStore) AddReport(_ context.Context, r tierlist.Report, threshold int, now time.Time) (tierlist.ReportOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["AddReport"]; err != nil {
+		return tierlist.ReportOutcome{}, err
+	}
+	t, ok := m.byID[r.TierlistID]
+	if !ok {
+		return tierlist.ReportOutcome{}, tierlist.ErrNotFound
+	}
+	if t.Status == domain.StatusHidden {
+		return tierlist.ReportOutcome{}, tierlist.ErrTierlistHidden
+	}
+	if threshold <= 0 {
+		threshold = tierlist.DefaultReportHideThreshold
+	}
+	byReporter := m.reports[r.TierlistID]
+	if byReporter == nil {
+		byReporter = map[string]tierlist.Report{}
+		m.reports[r.TierlistID] = byReporter
+	}
+	if _, dup := byReporter[r.ReporterKey]; dup {
+		return tierlist.ReportOutcome{}, tierlist.ErrReportDuplicate
+	}
+	r.ReportsCount = len(byReporter) + 1
+	byReporter[r.ReporterKey] = r
+	out := tierlist.ReportOutcome{ReportsCount: r.ReportsCount}
+	if r.ReportsCount >= threshold {
+		out.Hidden = true
+		t.Status, t.UpdatedAt = domain.StatusHidden, now
+		m.byID[t.ID] = t
+		m.auditID++
+		m.audit = append(m.audit, tierlist.ModerationAction{
+			ID: m.auditID, TierlistID: t.ID, ActorRole: "system",
+			Action: "auto_hide", Reason: "auto:threshold",
+			ReportsCount: r.ReportsCount, CreatedAt: now,
+		})
+	}
+	return out, nil
+}
+
+// CountReports implements tierlist.ReportStore.
+func (m *MemStore) CountReports(_ context.Context, tierlistID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["CountReports"]; err != nil {
+		return 0, err
+	}
+	return len(m.reports[tierlistID]), nil
+}
+
+// AuditTrail implements tierlist.ReportStore.
+func (m *MemStore) AuditTrail(_ context.Context, tierlistID string) ([]tierlist.ModerationAction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["AuditTrail"]; err != nil {
+		return nil, err
+	}
+	out := make([]tierlist.ModerationAction, 0)
+	for i := len(m.audit) - 1; i >= 0; i-- {
+		if m.audit[i].TierlistID == tierlistID {
+			out = append(out, m.audit[i])
+		}
+	}
+	return out, nil
+}
+
+// RecordModerationAction implements tierlist.ReportStore.
+func (m *MemStore) RecordModerationAction(_ context.Context, a tierlist.ModerationAction) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["RecordModerationAction"]; err != nil {
+		return err
+	}
+	m.auditID++
+	a.ID = m.auditID
+	m.audit = append(m.audit, a)
+	return nil
+}
+
+// ReportsLen returns the number of stored reports of a tier list.
+func (m *MemStore) ReportsLen(tierlistID string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.reports[tierlistID])
 }
 
 // Users is a map-backed tierlist.Users.
