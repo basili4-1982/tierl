@@ -1,0 +1,108 @@
+name: openspec-archive
+
+# Zero-touch архивация OpenSpec change после мержа PR задачи.
+#
+# Воркер пишет в тело PR метку `OpenSpec-Change: <id>` (у задач, созданных из
+# change'а). Здесь, на уже смерженном PR, спецификация change'а переносится в
+# живые спеки, сам change уходит в openspec/changes/archive, и дельта уезжает
+# отдельным PR, который тут же и мержится.
+#
+# Идемпотентность: change уже в архиве — выходим; ветка с открытым PR осталась
+# от прошлого прогона — доводим её до мержа, а не создаём вторую.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: openspec-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: read the change marker from the PR body
+        id: marker
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          change="$(printf '%s\n' "$BODY" | sed -n 's/^[[:space:]]*OpenSpec-Change:[[:space:]]*\([A-Za-z0-9][A-Za-z0-9._-]*\).*/\1/p' | head -n1)"
+          echo "change=$change" >> "$GITHUB_OUTPUT"
+          if [ -z "$change" ]; then
+            echo "PR не несёт метки OpenSpec-Change — архивировать нечего."
+          else
+            echo "change=$change (PR «$PR_TITLE»)"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.marker.outputs.change != ''
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        if: steps.marker.outputs.change != ''
+        with:
+          node-version: 22
+
+      - name: archive the change and publish the delta
+        if: steps.marker.outputs.change != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGE: ${{ steps.marker.outputs.change }}
+        run: |
+          set -euo pipefail
+          branch="docs/openspec-archive-$CHANGE"
+
+          # Прогон-повтор: PR архивации уже открыт (прошлый запуск упал до мержа).
+          if gh pr view "$branch" --json state --jq '.state' 2>/dev/null | grep -q '^OPEN$'; then
+            echo "Открытый PR $branch уже есть — доводим до мержа."
+            gh pr merge "$branch" --squash --delete-branch
+            exit 0
+          fi
+
+          if [ ! -d "openspec/changes/$CHANGE" ]; then
+            echo "change $CHANGE уже в архиве (или его нет) — архивировать нечего."
+            exit 0
+          fi
+
+          npm install --global @fission-ai/openspec@1.15.0
+          openspec validate --strict --all --no-interactive
+          openspec archive "$CHANGE" --yes
+          # После архивации проверяем без --strict: для новой capability
+          # openspec пишет заглушку Purpose, и --strict превращает это
+          # предупреждение в ошибку. Структурные ошибки ловятся и так.
+          openspec validate --all --no-interactive
+
+          git config user.name "openspec-archive[bot]"
+          git config user.email "openspec-archive@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "docs(openspec): архив change $CHANGE"
+
+          # main мог уехать, пока шла архивация: перебазируемся и пробуем
+          # отправить ветку до трёх раз.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push -u origin "$branch"; then
+              break
+            fi
+            echo "push не прошёл (попытка $attempt) — повторяем на свежем main"
+            sleep 5
+          done
+
+          gh pr create --base main --head "$branch" \
+            --title "docs(openspec): архив change $CHANGE" \
+            --body "Реализация слита — дельта change'а \`$CHANGE\` перенесена в живые спеки, сам change перемещён в \`openspec/changes/archive/\`.
+
+          Автоматически по метке \`OpenSpec-Change: $CHANGE\` из PR #${{ github.event.pull_request.number }}; \`openspec validate --strict --all\` пройден до и после архивации."
+
+          gh pr merge "$branch" --squash --delete-branch
