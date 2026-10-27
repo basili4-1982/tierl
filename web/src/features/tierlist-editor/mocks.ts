@@ -65,6 +65,14 @@ function build(slug: string, input: Input | (Patch & Partial<Input>), base?: Tie
 
 // Mocks follow api/openapi.yaml (tierlists tag).
 export const tierlistEditorHandlers = [
+  http.post('/api/v1/media', async ({ request }) => {
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!(file instanceof File) || file.size === 0) {
+      return err(400, 'bad_request', 'Поле file обязательно');
+    }
+    return HttpResponse.json({ url: 'https://cdn.example.com/uploaded.png' });
+  }),
   http.post('/api/v1/tierlists', async ({ request }) => {
     const input = (await request.json()) as Input;
     const slug = input.visibility === 'public' ? (input.slug ?? '') : 'unlisted-random-slug-0001';

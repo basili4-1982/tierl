@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { ApiError } from '../../api/client';
+import { uploadMedia } from './api';
 import { move, newItem } from './model';
 import { LIMITS } from './validation';
 import type { DraftItem, FieldErrors } from './validation';
@@ -10,8 +12,29 @@ interface Props {
   onChange: (items: DraftItem[]) => void;
 }
 
+function uploadMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    switch (e.status) {
+      case 413:
+        return 'Файл слишком большой (максимум 5 МиБ).';
+      case 415:
+        return 'Поддерживаются только PNG, JPEG, WebP и GIF.';
+      case 400:
+        return 'Файл повреждён или не является картинкой.';
+      case 401:
+        return 'Войдите, чтобы загрузить картинку.';
+      case 503:
+        return 'Загрузка картинок недоступна.';
+    }
+    return e.body?.message ?? `Не удалось загрузить картинку (HTTP ${e.status}).`;
+  }
+  return 'Не удалось загрузить картинку. Проверьте соединение и повторите.';
+}
+
 export function ItemsEditor({ items, errors, disabled, onChange }: Props) {
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<number | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const patch = (i: number, p: Partial<DraftItem>) =>
     onChange(items.map((it, j) => (j === i ? { ...it, ...p } : it)));
@@ -22,6 +45,19 @@ export function ItemsEditor({ items, errors, disabled, onChange }: Props) {
     onChange([...items, it]);
   };
 
+  const upload = async (i: number, file: File) => {
+    setUploadError(null);
+    setUploading(i);
+    try {
+      const url = await uploadMedia(file);
+      patch(i, { imageUrl: url });
+    } catch (e) {
+      setUploadError(uploadMessage(e));
+    } finally {
+      setUploading(null);
+    }
+  };
+
   return (
     <fieldset disabled={disabled} aria-describedby={errors.items ? 'te-items-err' : undefined}>
       <legend>
@@ -30,6 +66,11 @@ export function ItemsEditor({ items, errors, disabled, onChange }: Props) {
       {errors.items && (
         <p id="te-items-err" className="te-error">
           {errors.items}
+        </p>
+      )}
+      {uploadError && (
+        <p role="alert" className="te-error">
+          {uploadError}
         </p>
       )}
       <ol className="te-list">
@@ -79,6 +120,30 @@ export function ItemsEditor({ items, errors, disabled, onChange }: Props) {
                     <p id={`item-img-err-${it.key}`} className="te-error">
                       {urlErr}
                     </p>
+                  )}
+                </div>
+                <div className="te-field">
+                  <label htmlFor={`item-file-${it.key}`}>Загрузить картинку {n}</label>
+                  <input
+                    id={`item-file-${it.key}`}
+                    name="file"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    disabled={uploading === i}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void upload(i, file);
+                      e.target.value = '';
+                    }}
+                  />
+                  {uploading === i && <p role="status">Загрузка картинки…</p>}
+                  {it.imageUrl.trim() && (
+                    <div className="te-image">
+                      <img src={it.imageUrl.trim()} alt={`Картинка элемента ${n}`} />
+                      <button type="button" onClick={() => patch(i, { imageUrl: '' })}>
+                        Удалить картинку {n}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
