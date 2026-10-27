@@ -17,9 +17,12 @@ permissions:
   contents: write
   pull-requests: write
 
+# Прогоны не теряем: очередь по умолчанию держит один pending и отменяет его
+# при следующем мерже — change из отменённого прогона остался бы неархивным.
 concurrency:
   group: openspec-archive
   cancel-in-progress: false
+  queue: max
 
 jobs:
   archive:
@@ -103,6 +106,6 @@ jobs:
             --title "docs(openspec): архив change $CHANGE" \
             --body "Реализация слита — дельта change'а \`$CHANGE\` перенесена в живые спеки, сам change перемещён в \`openspec/changes/archive/\`.
 
-          Автоматически по метке \`OpenSpec-Change: $CHANGE\` из PR #${{ github.event.pull_request.number }}; \`openspec validate --strict --all\` пройден до и после архивации."
+          Автоматически по метке \`OpenSpec-Change: $CHANGE\` из PR #${{ github.event.pull_request.number }}: \`openspec validate --strict --all\` пройден до архивации, после неё — \`openspec validate --all\` (у новой capability CLI пишет заглушку Purpose, и --strict валит её как предупреждение)."
 
           gh pr merge "$branch" --squash --delete-branch
