@@ -159,7 +159,7 @@ cd web && npm run dev
 | `make build` | собрать бинарник в `bin/tierl` |
 | `make build-migrate` | собрать бинарник миграций в `bin/migrate` |
 | `make test` | `go test -race ./...` |
-| `make cover` | покрытие `./internal/...` с порогом 80% |
+| `make cover` | покрытие `./internal/...` с порогом `COVER_MIN` (52, только растёт) |
 | `make fmt` / `make lint` / `make vet` | форматирование и линтеры |
 | `make web-install` / `make web-build` / `make web-test` | фронтенд: зависимости / сборка / проверки |
 
