@@ -29,6 +29,9 @@ function AccountNav() {
   }
   return (
     <>
+      <NavLink to="/profile" className={navClass}>
+        Профиль
+      </NavLink>
       <span className="nav-user">{user.display_name}</span>
       <button
         type="button"

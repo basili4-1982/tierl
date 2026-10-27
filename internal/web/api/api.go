@@ -107,8 +107,10 @@ func New(d Deps) *API {
 		a.mux.HandleFunc("POST "+Prefix+"/auth/logout-all", a.logoutAll)
 		a.mux.HandleFunc("POST "+Prefix+"/auth/change-password", a.changePassword)
 		a.mux.HandleFunc("PATCH "+Prefix+"/auth/password", a.changePassword)
+		a.mux.HandleFunc("POST "+Prefix+"/me/password", a.changeMyPassword)
 		a.mux.HandleFunc("GET "+Prefix+"/auth/me", a.me)
 	}
+	a.mux.HandleFunc("GET "+Prefix+"/me/tierlists", a.listMyTierlists)
 	if a.accounts != nil {
 		a.mux.Handle("POST "+Prefix+"/auth/verify-email",
 			withMiddleware(http.HandlerFunc(a.verifyEmail), d.VerifyEmailLimit))

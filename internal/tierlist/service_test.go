@@ -294,7 +294,7 @@ func TestUpdate_Errors(t *testing.T) {
 		want error
 	}{
 		{"guest", "", "langs", tierlist.UpdateInput{Title: ptr("x")}, tierlist.ErrForbidden},
-		{"not author", "bob", "langs", tierlist.UpdateInput{Title: ptr("x")}, tierlist.ErrForbidden},
+		{"not author", "bob", "langs", tierlist.UpdateInput{Title: ptr("x")}, tierlist.ErrNotFound},
 		{"missing", "anna", "nothing", tierlist.UpdateInput{Title: ptr("x")}, tierlist.ErrNotFound},
 		{"empty title", "anna", "langs", tierlist.UpdateInput{Title: ptr("")}, domain.ErrInvalid},
 		{"long description", "anna", "langs", tierlist.UpdateInput{Description: ptr(strings.Repeat("я", 1001))}, domain.ErrInvalid},
@@ -381,7 +381,7 @@ func TestClose(t *testing.T) {
 	if _, err := e.svc.Create(ctx, "anna", validCreate()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.Close(ctx, "bob", "langs"); !errors.Is(err, tierlist.ErrForbidden) {
+	if _, err := e.svc.Close(ctx, "bob", "langs"); !errors.Is(err, tierlist.ErrNotFound) {
 		t.Fatalf("not author: %v", err)
 	}
 	if _, err := e.svc.Close(ctx, "anna", "nothing"); !errors.Is(err, tierlist.ErrNotFound) {
@@ -421,7 +421,7 @@ func TestDelete(t *testing.T) {
 	if _, err := e.svc.Create(ctx, "anna", validCreate()); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.Delete(ctx, "bob", "langs"); !errors.Is(err, tierlist.ErrForbidden) {
+	if err := e.svc.Delete(ctx, "bob", "langs"); !errors.Is(err, tierlist.ErrNotFound) {
 		t.Fatalf("not author: %v", err)
 	}
 	if err := e.svc.Delete(ctx, "", "langs"); !errors.Is(err, tierlist.ErrForbidden) {

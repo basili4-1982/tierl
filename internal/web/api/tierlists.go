@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/basili4-1982/tierl/internal/domain"
@@ -31,12 +32,27 @@ type patchRequest struct {
 	Title       *string         `json:"title"`
 	Description *string         `json:"description"`
 	Visibility  *string         `json:"visibility"`
+	Status      *string         `json:"status"`
 	Tiers       *[]tierInputDTO `json:"tiers"`
 	Items       *[]itemInputDTO `json:"items"`
 }
 
 func (p patchRequest) empty() bool {
-	return p.Title == nil && p.Description == nil && p.Visibility == nil && p.Tiers == nil && p.Items == nil
+	return p.Title == nil && p.Description == nil && p.Visibility == nil &&
+		p.Status == nil && p.Tiers == nil && p.Items == nil
+}
+
+// parseStatus accepts the lifecycle names and "public" as the author-facing
+// synonym of reopening a tier list.
+func parseStatus(raw string) (domain.Status, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "closed":
+		return domain.StatusClosed, true
+	case "open", "public":
+		return domain.StatusOpen, true
+	default:
+		return "", false
+	}
 }
 
 type tierDTO struct {
@@ -109,6 +125,40 @@ func toTierlistDTO(d *tierlist.Details) tierlistDTO {
 	return out
 }
 
+type myTierlistDTO struct {
+	ID               string    `json:"id"`
+	Slug             string    `json:"slug"`
+	Title            string    `json:"title"`
+	Description      string    `json:"description"`
+	Visibility       string    `json:"visibility"`
+	Status           string    `json:"status"`
+	ItemsCount       int       `json:"items_count"`
+	SubmissionsCount int       `json:"submissions_count"`
+	CoverURL         *string   `json:"cover_url"`
+	Author           authorDTO `json:"author"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type myTierlistsDTO struct {
+	Items      []myTierlistDTO `json:"items"`
+	NextCursor *string         `json:"next_cursor"`
+}
+
+func toMyTierlistDTO(m tierlist.MyTierlist) myTierlistDTO {
+	return myTierlistDTO{
+		ID:               m.ID,
+		Slug:             m.Slug,
+		Title:            m.Title,
+		Description:      m.Description,
+		Visibility:       string(m.Visibility),
+		Status:           string(m.Status),
+		ItemsCount:       m.ItemCount,
+		SubmissionsCount: m.SubmissionsCount,
+		Author:           authorDTO{ID: m.AuthorID, DisplayName: m.AuthorName},
+		CreatedAt:        m.CreatedAt.UTC(),
+	}
+}
+
 func toTierInputs(in []tierInputDTO) []tierlist.TierInput {
 	out := make([]tierlist.TierInput, 0, len(in))
 	for _, t := range in {
@@ -127,6 +177,23 @@ func toItemInputs(in []itemInputDTO) []tierlist.ItemInput {
 		out = append(out, item)
 	}
 	return out
+}
+
+func (a *API) listMyTierlists(w http.ResponseWriter, r *http.Request) {
+	userID, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	entries, err := a.tierlists.ListMine(r.Context(), userID)
+	if err != nil {
+		a.writeServiceError(w, r, err)
+		return
+	}
+	items := make([]myTierlistDTO, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, toMyTierlistDTO(e))
+	}
+	writeJSON(w, http.StatusOK, myTierlistsDTO{Items: items})
 }
 
 func (a *API) createTierlist(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +247,14 @@ func (a *API) updateTierlist(w http.ResponseWriter, r *http.Request) {
 	if req.Visibility != nil {
 		v := domain.Visibility(*req.Visibility)
 		in.Visibility = &v
+	}
+	if req.Status != nil {
+		status, valid := parseStatus(*req.Status)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "bad_request", "Некорректный статус опроса", nil)
+			return
+		}
+		in.Status = &status
 	}
 	if req.Tiers != nil {
 		in.Tiers = toTierInputs(*req.Tiers)

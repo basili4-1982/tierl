@@ -192,7 +192,7 @@ func TestAPIFlowOnRealDatabase(t *testing.T) {
 		t.Fatalf("items = %v", got["items"])
 	}
 
-	if code, m := call(t, h, http.MethodPatch, p+"/langs", "bob", `{"title":"hack"}`); code != 403 || m["code"] != "forbidden" {
+	if code, m := call(t, h, http.MethodPatch, p+"/langs", "bob", `{"title":"hack"}`); code != 404 || m["code"] != "not_found" {
 		t.Fatalf("patch by stranger: %d %v", code, m)
 	}
 	if code, m := call(t, h, http.MethodPatch, p+"/langs", "anna", `{"title":"Renamed"}`); code != 200 || m["title"] != "Renamed" {
@@ -219,7 +219,7 @@ func TestAPIFlowOnRealDatabase(t *testing.T) {
 		t.Fatalf("close again: %d %v", code, m)
 	}
 
-	if code, _ := call(t, h, http.MethodDelete, p+"/langs", "bob", ""); code != 403 {
+	if code, _ := call(t, h, http.MethodDelete, p+"/langs", "bob", ""); code != 404 {
 		t.Fatalf("delete by stranger: %d", code)
 	}
 	if code, _ := call(t, h, http.MethodDelete, p+"/langs", "anna", ""); code != 204 {

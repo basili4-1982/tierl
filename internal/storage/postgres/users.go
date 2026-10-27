@@ -77,6 +77,40 @@ func (s *UserStore) UpdatePasswordHash(ctx context.Context, id, hash string, now
 	return nil
 }
 
+// UpdatePasswordAndDeleteSessions implements auth.PasswordSessions: the hash
+// update and the removal of every other session of the user commit together.
+func (s *UserStore) UpdatePasswordAndDeleteSessions(ctx context.Context, id, hash, keepTokenHash string, now time.Time) (removed int64, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: begin password change: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+	tag, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, updated_at = GREATEST($3, created_at) WHERE id = $1`, id, hash, now)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: update password hash: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, auth.ErrUserNotFound
+	}
+	if keepTokenHash == "" {
+		tag, err = tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id)
+	} else {
+		tag, err = tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, id, keepTokenHash)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("postgres: delete other sessions: %w", err)
+	}
+	removed = tag.RowsAffected()
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("postgres: commit password change: %w", err)
+	}
+	return removed, nil
+}
+
 // MarkEmailVerified implements auth.EmailMarker.
 func (s *UserStore) MarkEmailVerified(ctx context.Context, id string, now time.Time) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE users SET email_verified = true, updated_at = GREATEST($2, created_at) WHERE id = $1`, id, now)
