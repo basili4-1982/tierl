@@ -13,9 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Стражу порога покрытия нужны сообщения коммитов PR: на merge-ref
+          # GitHub по умолчанию клонируется один коммит без истории.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: coverage threshold may only grow
+        run: bash scripts/cover-guard.sh
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: vet
