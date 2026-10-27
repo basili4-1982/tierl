@@ -124,7 +124,7 @@ func secureRequest(r *http.Request) bool {
 }
 
 func (a *API) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure вычисляется по схеме запроса
 		Name:     auth.SessionCookieName,
 		Value:    token,
 		Path:     "/",
@@ -137,7 +137,7 @@ func (a *API) setSessionCookie(w http.ResponseWriter, r *http.Request, token str
 }
 
 func (a *API) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure вычисляется по схеме запроса
 		Name:     auth.SessionCookieName,
 		Value:    "",
 		Path:     "/",
