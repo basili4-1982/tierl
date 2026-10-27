@@ -62,6 +62,11 @@ type csrfTokenDTO struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
+type passwordChangedDTO struct {
+	CSRFToken       string `json:"csrf_token"`
+	RevokedSessions int64  `json:"revoked_sessions"`
+}
+
 type userDTO struct {
 	ID            string    `json:"id"`
 	Email         string    `json:"email"`
@@ -288,6 +293,44 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	a.clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// changeMyPassword handles POST /me/password. It keeps the current session
+// open and closes every other session of the user.
+func (a *API) changeMyPassword(w http.ResponseWriter, r *http.Request) {
+	token, sess, ok := a.currentSession(w, r)
+	if !ok {
+		return
+	}
+	var req changePasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	oldPassword := req.CurrentPassword
+	if oldPassword == "" {
+		oldPassword = req.OldPassword
+	}
+	revoked, err := a.authService.ChangePasswordKeepingCurrent(r.Context(), sess.UserID, token, oldPassword, req.NewPassword)
+	if err != nil {
+		var ve *auth.ValidationError
+		if errors.As(err, &ve) && ve.Field == "password" {
+			fields := map[string]string{ve.Field: ve.Reason}
+			// The contract names the new password new_password; keep both keys
+			// so a client can map the error onto either input.
+			fields["new_password"] = ve.Reason
+			writeError(w, http.StatusBadRequest, "validation_failed", "Проверьте поля формы",
+				map[string]any{"fields": fields})
+			return
+		}
+		a.writeAuthError(w, r, err)
+		return
+	}
+	csrfToken, err := a.csrf.Token()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка", nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, passwordChangedDTO{CSRFToken: csrfToken, RevokedSessions: revoked})
 }
 
 // verifyEmail handles POST /auth/verify-email.

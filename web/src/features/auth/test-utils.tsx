@@ -4,9 +4,11 @@ import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { resetCsrfToken } from './api';
 import { resetAuthMock } from './mocks';
+import { resetProfileMock } from '../profile/mocks';
 
 export function resetAuthTestState() {
   resetAuthMock();
+  resetProfileMock();
   resetCsrfToken();
 }
 

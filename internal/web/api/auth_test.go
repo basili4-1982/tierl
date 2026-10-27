@@ -132,6 +132,19 @@ func (s *authSessions) DeleteByUserID(_ context.Context, userID string) error {
 	return nil
 }
 
+func (s *authSessions) DeleteOthersByUserID(_ context.Context, userID, keepTokenHash string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for k, x := range s.rows {
+		if x.UserID == userID && k != keepTokenHash {
+			delete(s.rows, k)
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *authSessions) DeleteExpired(_ context.Context, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -324,5 +337,72 @@ func TestAuthLoginInvalidCredentials(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
 	if rec.Code != http.StatusUnauthorized || m["code"] != "invalid_credentials" {
 		t.Fatalf("login: %d %v", rec.Code, m)
+	}
+}
+
+func TestMePasswordKeepsCurrentSession(t *testing.T) {
+	e := newAuthEnv(t)
+	body := `{"email":"anna@example.com","password":"correct-horse-battery","display_name":"Anna"}`
+	rec := e.do(t, http.MethodPost, "/auth/register", body, e.csrf, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register: %d %s", rec.Code, rec.Body.String())
+	}
+	first := sessionFrom(t, rec)
+	rec = e.do(t, http.MethodPost, "/auth/login", `{"email":"anna@example.com","password":"correct-horse-battery"}`, e.csrf, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+	current := sessionFrom(t, rec)
+	if first == "" || current == "" || e.sessions.Len() != 2 {
+		t.Fatalf("sessions: %q %q rows=%d", first, current, e.sessions.Len())
+	}
+
+	// The current session must stay usable after the change.
+	rec = e.do(t, http.MethodGet, "/auth/me", "", "", current)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me before change: %d", rec.Code)
+	}
+
+	rec = e.do(t, http.MethodPost, "/me/password",
+		`{"current_password":"correct-horse-battery","new_password":"another-long-password"}`, e.csrf, current)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change password: %d %s", rec.Code, rec.Body.String())
+	}
+	var changed struct {
+		CSRF    string `json:"csrf_token"`
+		Revoked int64  `json:"revoked_sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &changed); err != nil || changed.CSRF == "" {
+		t.Fatalf("response: %s (%v)", rec.Body.String(), err)
+	}
+	if changed.Revoked != 1 {
+		t.Errorf("revoked_sessions = %d, want 1", changed.Revoked)
+	}
+	if e.sessions.Len() != 1 {
+		t.Fatalf("expected only the current session, got %d", e.sessions.Len())
+	}
+	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", current); rec.Code != http.StatusOK {
+		t.Fatalf("current session before: %d", rec.Code)
+	}
+	if rec := e.do(t, http.MethodGet, "/auth/me", "", "", first); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old session survived: %d", rec.Code)
+	}
+	if rec := e.do(t, http.MethodPost, "/auth/login", `{"email":"anna@example.com","password":"correct-horse-battery"}`, e.csrf, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old password still works: %d", rec.Code)
+	}
+	if rec := e.do(t, http.MethodPost, "/auth/login", `{"email":"anna@example.com","password":"another-long-password"}`, e.csrf, ""); rec.Code != http.StatusOK {
+		t.Fatalf("new password rejected: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A weak new password is a 400 with a field reason; sessions stay intact.
+	rec = e.do(t, http.MethodPost, "/me/password", `{"current_password":"another-long-password","new_password":"short"}`, e.csrf, current)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("weak password: %d %s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	fields, _ := m["details"].(map[string]any)["fields"].(map[string]any)
+	if fields["password"] == nil {
+		t.Errorf("weak password has no reason: %v", m)
 	}
 }

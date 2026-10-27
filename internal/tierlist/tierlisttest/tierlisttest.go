@@ -209,6 +209,83 @@ func (m *MemStore) ListPublic(context.Context, tierlist.PageParams) (tierlist.Ca
 	return tierlist.CatalogPage{}, nil
 }
 
+// ListByOwner implements tierlist.OwnerStore.
+func (m *MemStore) ListByOwner(_ context.Context, userID string) ([]tierlist.OwnerEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["ListByOwner"]; err != nil {
+		return nil, err
+	}
+	if err := m.Errs["ListPublic"]; err != nil {
+		return nil, err
+	}
+	out := make([]tierlist.OwnerEntry, 0)
+	for _, t := range m.byID {
+		if t.AuthorID != userID {
+			continue
+		}
+		n := m.countByTierlist(t.ID)
+		if n == 0 {
+			n = m.subs[t.ID]
+		}
+		out = append(out, tierlist.OwnerEntry{
+			ID: t.ID, Slug: t.Slug, AuthorID: t.AuthorID, Title: t.Title,
+			Description: t.Description, Visibility: t.Visibility, Status: t.Status,
+			ItemCount: len(t.Items), Submissions: n, CreatedAt: t.CreatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+// SetStatusForOwner implements tierlist.OwnerStore.
+func (m *MemStore) SetStatusForOwner(_ context.Context, id, userID string, status domain.Status, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["SetStatusForOwner"]; err != nil {
+		return err
+	}
+	if err := m.Errs["SetStatus"]; err != nil {
+		return err
+	}
+	t, ok := m.byID[id]
+	if !ok || t.AuthorID != userID {
+		return tierlist.ErrNotFound
+	}
+	t.Status, t.UpdatedAt = status, now
+	m.byID[id] = t
+	return nil
+}
+
+// DeleteForOwner implements tierlist.OwnerStore.
+func (m *MemStore) DeleteForOwner(_ context.Context, id, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["DeleteForOwner"]; err != nil {
+		return err
+	}
+	if err := m.Errs["Delete"]; err != nil {
+		return err
+	}
+	t, ok := m.byID[id]
+	if !ok || t.AuthorID != userID {
+		return tierlist.ErrNotFound
+	}
+	delete(m.byID, id)
+	delete(m.subs, id)
+	for sid, rec := range m.submissions {
+		if rec.TierlistID == id {
+			delete(m.submissions, sid)
+		}
+	}
+	return nil
+}
+
 // Users is a map-backed tierlist.Users.
 type Users map[string]tierlist.Profile
 

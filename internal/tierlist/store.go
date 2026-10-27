@@ -132,3 +132,31 @@ type CatalogPage struct {
 
 // ErrBadCursor is returned for a malformed catalog cursor.
 var ErrBadCursor = errors.New("tierlist: invalid cursor")
+
+// OwnerEntry is a tier list summary for its author, including the state and
+// the aggregates shown on the profile page.
+type OwnerEntry struct {
+	ID          string
+	Slug        string
+	AuthorID    string
+	Title       string
+	Description string
+	Visibility  domain.Visibility
+	Status      domain.Status
+	ItemCount   int
+	Submissions int
+	CreatedAt   time.Time
+}
+
+// OwnerStore is the optional part of a Store used by the author profile: it
+// filters by owner in SQL and lets writes check the owner atomically.
+type OwnerStore interface {
+	// ListByOwner returns every tier list of the user, newest first.
+	ListByOwner(ctx context.Context, userID string) ([]OwnerEntry, error)
+	// SetStatusForOwner changes the status only when the user is the author.
+	// It returns ErrNotFound for an unknown or foreign tier list.
+	SetStatusForOwner(ctx context.Context, id, userID string, status domain.Status, now time.Time) error
+	// DeleteForOwner removes the tier list only when the user is the author.
+	// It returns ErrNotFound for an unknown or foreign tier list.
+	DeleteForOwner(ctx context.Context, id, userID string) error
+}

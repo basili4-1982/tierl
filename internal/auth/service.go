@@ -47,6 +47,18 @@ type EmailMarker interface {
 	MarkEmailVerified(ctx context.Context, id string, now time.Time) error
 }
 
+// PasswordSessions is implemented by user stores that can change the password
+// hash and delete all other sessions of the account in one transaction.
+type PasswordSessions interface {
+	UpdatePasswordAndDeleteSessions(ctx context.Context, userID, hash, keepTokenHash string, now time.Time) (int64, error)
+}
+
+// OtherSessionDeleter is implemented by session stores that can remove every
+// session of a user except the one identified by keepTokenHash.
+type OtherSessionDeleter interface {
+	DeleteOthersByUserID(ctx context.Context, userID, keepTokenHash string) (int64, error)
+}
+
 // Options configure a Service. Zero values select safe defaults.
 type Options struct {
 	// Hash holds the argon2id parameters; the zero value means DefaultHashParams.
@@ -257,6 +269,69 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 		return fmt.Errorf("auth: change password: %w", err)
 	}
 	return nil
+}
+
+// ChangePasswordKeepingCurrent changes the password and revokes every session
+// of the user except the current one (identified by its raw cookie token).
+// It returns the number of revoked sessions when the store can report it.
+// Errors are the same as ChangePassword.
+func (s *Service) ChangePasswordKeepingCurrent(ctx context.Context, userID, currentToken, oldPassword, newPassword string) (int64, error) {
+	if err := ValidatePassword(newPassword); err != nil {
+		return 0, err
+	}
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	ok, err := s.hasher.Verify(oldPassword, u.PasswordHash)
+	if err != nil {
+		return 0, fmt.Errorf("auth: change password: %w", err)
+	}
+	if !ok {
+		return 0, ErrInvalidCredentials
+	}
+	hash, err := s.hasher.Hash(newPassword)
+	if err != nil {
+		return 0, fmt.Errorf("auth: change password: %w", err)
+	}
+	now := s.now().UTC()
+	keep := HashToken(currentToken)
+	if store, ok := s.users.(PasswordSessions); ok {
+		n, err := store.UpdatePasswordAndDeleteSessions(ctx, userID, hash, keep, now)
+		if err != nil {
+			return 0, fmt.Errorf("auth: change password: %w", err)
+		}
+		return n, nil
+	}
+	if err := s.users.UpdatePasswordHash(ctx, userID, hash, now); err != nil {
+		return 0, fmt.Errorf("auth: change password: %w", err)
+	}
+	return s.deleteOtherSessions(ctx, userID, keep)
+}
+
+// deleteOtherSessions is the non-transactional fallback for stores that do not
+// implement PasswordSessions. The current session is kept when the session
+// store supports it.
+func (s *Service) deleteOtherSessions(ctx context.Context, userID, keepTokenHash string) (int64, error) {
+	switch r := s.sessions.(type) {
+	case nil:
+		return 0, nil
+	case OtherSessionDeleter:
+		n, err := r.DeleteOthersByUserID(ctx, userID, keepTokenHash)
+		if err != nil {
+			return 0, fmt.Errorf("revoke sessions: %w", err)
+		}
+		return n, nil
+	case interface {
+		DeleteByUserID(ctx context.Context, userID string) error
+	}:
+		if err := r.DeleteByUserID(ctx, userID); err != nil {
+			return 0, fmt.Errorf("revoke sessions: %w", err)
+		}
+		return 0, nil
+	default:
+		return 0, errors.New("auth: unsupported session revoker")
+	}
 }
 
 // SetPassword sets a new password without checking the old one and revokes

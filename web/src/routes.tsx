@@ -1,5 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 import { authRoutes } from './features/auth/routes';
+import { RequireAuth } from './features/auth/RequireAuth';
+import { ProfilePage } from './features/profile/ProfilePage';
 import { ResultPage } from './features/result/ResultPage';
 import { TakeTierlistPage } from './features/take-tierlist/TakeTierlistPage';
 import { TierlistEditorPage } from './features/tierlist-editor/TierlistEditorPage';
@@ -15,6 +17,9 @@ export function AppRoutes() {
         <Route path="/" element={<HomePage />} />
         <Route path="/catalog" element={<CatalogPage />} />
         {authRoutes()}
+        <Route element={<RequireAuth />}>
+          <Route path="/profile" element={<ProfilePage />} />
+        </Route>
         <Route path="/t/:slug" element={<TakeTierlistPage />} />
         <Route path="/r/:id" element={<ResultPage />} />
         <Route path="/tierlists/new" element={<TierlistEditorPage />} />

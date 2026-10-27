@@ -109,9 +109,26 @@ type UpdateInput struct {
 	Title       *string
 	Description *string
 	Visibility  *domain.Visibility
+	// Status closes or reopens the tier list (open/closed only).
+	Status *domain.Status
 	// Tiers and Items replace the whole set; forbidden after the first answer.
 	Tiers []TierInput
 	Items []ItemInput
+}
+
+// MyTierlist is one row of the author's profile list.
+type MyTierlist struct {
+	ID               string
+	Slug             string
+	Title            string
+	Description      string
+	Visibility       domain.Visibility
+	Status           domain.Status
+	ItemCount        int
+	SubmissionsCount int
+	CreatedAt        time.Time
+	AuthorID         string
+	AuthorName       string
 }
 
 // Details is a tier list prepared for the author or a reader.
@@ -183,9 +200,47 @@ func (s *Service) Get(ctx context.Context, viewerID, slug string) (*Details, err
 	return s.details(ctx, t, viewerID)
 }
 
+// ListMine returns the tier lists of userID with their state and aggregates.
+// A foreign tier list never appears in the result.
+func (s *Service) ListMine(ctx context.Context, userID string) ([]MyTierlist, error) {
+	if userID == "" {
+		return nil, ErrForbidden
+	}
+	ownerStore, ok := s.store.(OwnerStore)
+	if !ok {
+		return nil, errors.New("tierlist: store does not support owner lists")
+	}
+	entries, err := ownerStore.ListByOwner(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("tierlist: list mine: %w", err)
+	}
+	name := ""
+	if s.users != nil {
+		prof, err := s.users.Profile(ctx, userID)
+		switch {
+		case err == nil:
+			name = prof.DisplayName
+		case errors.Is(err, ErrNotFound):
+			// A removed account: keep the rows without a display name.
+		default:
+			return nil, fmt.Errorf("tierlist: load author: %w", err)
+		}
+	}
+	out := make([]MyTierlist, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, MyTierlist{
+			ID: e.ID, Slug: e.Slug, Title: e.Title, Description: e.Description,
+			Visibility: e.Visibility, Status: e.Status, ItemCount: e.ItemCount,
+			SubmissionsCount: e.Submissions, CreatedAt: e.CreatedAt,
+			AuthorID: e.AuthorID, AuthorName: name,
+		})
+	}
+	return out, nil
+}
+
 // Update changes a tier list of its author. Title, description and visibility
 // can always change; items and tiers only until the first answer
-// (domain.ErrStructureLocked afterwards).
+// (domain.ErrStructureLocked afterwards). Status closes or reopens the list.
 func (s *Service) Update(ctx context.Context, userID, slug string, in UpdateInput) (*Details, error) {
 	t, err := s.owned(ctx, userID, slug)
 	if err != nil {
@@ -207,6 +262,17 @@ func (s *Service) Update(ctx context.Context, userID, slug string, in UpdateInpu
 	}
 	if in.Visibility != nil {
 		if err := s.changeVisibility(t, *in.Visibility, now); err != nil {
+			return nil, err
+		}
+	}
+	if in.Status != nil {
+		if err := changeStatus(t, *in.Status, now); err != nil {
+			return nil, err
+		}
+	} else if in.Visibility != nil && *in.Visibility == domain.VisibilityPublic && t.Status == domain.StatusClosed {
+		// "public" is the author-facing name of the reopened state; accepting it
+		// as visibility on a closed list makes reopening work for both clients.
+		if err := changeStatus(t, domain.StatusOpen, now); err != nil {
 			return nil, err
 		}
 	}
@@ -272,10 +338,10 @@ func (s *Service) Close(ctx context.Context, userID, slug string) (*Details, err
 	}
 	if t.Status != domain.StatusClosed {
 		now := s.now()
-		if err := t.Close(now); err != nil {
+		if err := changeStatus(t, domain.StatusClosed, now); err != nil {
 			return nil, err
 		}
-		if err := s.store.SetStatus(ctx, t.ID, domain.StatusClosed, now); err != nil {
+		if err := s.setStatus(ctx, t, userID, domain.StatusClosed, now); err != nil {
 			return nil, err
 		}
 	}
@@ -283,12 +349,46 @@ func (s *Service) Close(ctx context.Context, userID, slug string) (*Details, err
 }
 
 // Delete removes the tier list of its author together with its answers.
-func (s *Service) Delete(ctx context.Context, userID, slug string) error {
-	t, err := s.owned(ctx, userID, slug)
+func (s *Service) Delete(ctx context.Context, userID, ref string) error {
+	t, err := s.owned(ctx, userID, ref)
 	if err != nil {
 		return err
 	}
+	if owner, ok := s.store.(OwnerStore); ok {
+		return owner.DeleteForOwner(ctx, t.ID, userID)
+	}
 	return s.store.Delete(ctx, t.ID)
+}
+
+// changeStatus applies the author's open/closed transition. Closing and
+// reopening are idempotent.
+func changeStatus(t *domain.Tierlist, target domain.Status, now time.Time) error {
+	switch target {
+	case domain.StatusClosed:
+		switch t.Status {
+		case domain.StatusClosed:
+			return nil
+		case domain.StatusOpen:
+			t.Status, t.UpdatedAt = domain.StatusClosed, now
+			return nil
+		}
+	case domain.StatusOpen:
+		switch t.Status {
+		case domain.StatusOpen:
+			return nil
+		case domain.StatusClosed, domain.StatusDraft:
+			t.Status, t.UpdatedAt = domain.StatusOpen, now
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s -> %s", domain.ErrInvalidTransition, t.Status, target)
+}
+
+func (s *Service) setStatus(ctx context.Context, t *domain.Tierlist, userID string, status domain.Status, now time.Time) error {
+	if owner, ok := s.store.(OwnerStore); ok {
+		return owner.SetStatusForOwner(ctx, t.ID, userID, status, now)
+	}
+	return s.store.SetStatus(ctx, t.ID, status, now)
 }
 
 // readable loads a tier list that readers may see.
@@ -306,14 +406,24 @@ func (s *Service) readable(ctx context.Context, slug string) (*domain.Tierlist, 
 	return t, nil
 }
 
-// owned loads a tier list and checks that userID is its author.
-func (s *Service) owned(ctx context.Context, userID, slug string) (*domain.Tierlist, error) {
-	t, err := s.readable(ctx, slug)
+// owned loads a tier list by ID (or, for the legacy slug routes, by slug) and
+// checks that userID is its author. A foreign list is reported as not found so
+// its existence is not leaked.
+func (s *Service) owned(ctx context.Context, userID, ref string) (*domain.Tierlist, error) {
+	if userID == "" {
+		return nil, ErrForbidden
+	}
+	t, err := s.store.GetByID(ctx, ref)
+	if errors.Is(err, ErrNotFound) {
+		// Legacy routes address a tier list by slug and keep the reader
+		// visibility rules (draft/hidden stay not found).
+		t, err = s.readable(ctx, ref)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if userID == "" || t.AuthorID != userID {
-		return nil, ErrForbidden
+	if t.AuthorID != userID {
+		return nil, ErrNotFound
 	}
 	return t, nil
 }

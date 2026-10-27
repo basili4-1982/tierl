@@ -298,7 +298,7 @@ func TestPatch_Errors(t *testing.T) {
 		code   string
 	}{
 		{"guest", "", "langs", `{"title":"x"}`, 401, "unauthorized"},
-		{"not author", "bob", "langs", `{"title":"x"}`, 403, "forbidden"},
+		{"not author", "bob", "langs", `{"title":"x"}`, 404, "not_found"},
 		{"missing", "anna", "nothing", `{"title":"x"}`, 404, "not_found"},
 		{"empty object", "anna", "langs", `{}`, 400, "bad_request"},
 		{"bad json", "anna", "langs", `[`, 400, "bad_request"},
@@ -318,7 +318,7 @@ func TestClose(t *testing.T) {
 	e.do(t, http.MethodPost, "/tierlists", "anna", createBody)
 
 	wantError(t, e.do(t, http.MethodPost, "/tierlists/langs/close", "", ""), 401, "unauthorized")
-	wantError(t, e.do(t, http.MethodPost, "/tierlists/langs/close", "bob", ""), 403, "forbidden")
+	wantError(t, e.do(t, http.MethodPost, "/tierlists/langs/close", "bob", ""), 404, "not_found")
 	wantError(t, e.do(t, http.MethodPost, "/tierlists/nothing/close", "anna", ""), 404, "not_found")
 
 	for range 2 { // idempotent
@@ -338,7 +338,7 @@ func TestDelete(t *testing.T) {
 	e.do(t, http.MethodPost, "/tierlists", "anna", createBody)
 
 	wantError(t, e.do(t, http.MethodDelete, "/tierlists/langs", "", ""), 401, "unauthorized")
-	wantError(t, e.do(t, http.MethodDelete, "/tierlists/langs", "bob", ""), 403, "forbidden")
+	wantError(t, e.do(t, http.MethodDelete, "/tierlists/langs", "bob", ""), 404, "not_found")
 
 	rec := e.do(t, http.MethodDelete, "/tierlists/langs", "anna", "")
 	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {

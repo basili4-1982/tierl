@@ -66,6 +66,22 @@ func (s *SessionStore) DeleteByUserID(ctx context.Context, userID string) error 
 	return nil
 }
 
+// DeleteOthersByUserID implements auth.OtherSessionDeleter.
+func (s *SessionStore) DeleteOthersByUserID(ctx context.Context, userID, keepTokenHash string) (int64, error) {
+	if keepTokenHash == "" {
+		tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
+		if err != nil {
+			return 0, fmt.Errorf("postgres: delete other sessions: %w", err)
+		}
+		return tag.RowsAffected(), nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, userID, keepTokenHash)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: delete other sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeleteExpired implements auth.Sessions.
 func (s *SessionStore) DeleteExpired(ctx context.Context, now time.Time) error {
 	if _, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= $1`, now); err != nil {
@@ -127,4 +143,9 @@ func (s *Store) DeleteUserSessions(ctx context.Context, userID string) error {
 // DeleteExpiredSessions is an alias for SessionStore.DeleteExpired.
 func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
 	return NewSessionStore(s.pool).DeleteExpired(ctx, now)
+}
+
+// DeleteOtherUserSessions is an alias for SessionStore.DeleteOthersByUserID.
+func (s *Store) DeleteOtherUserSessions(ctx context.Context, userID, keepTokenHash string) (int64, error) {
+	return NewSessionStore(s.pool).DeleteOthersByUserID(ctx, userID, keepTokenHash)
 }

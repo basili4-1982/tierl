@@ -161,6 +161,37 @@ func (m *SessionManager) LogoutAll(ctx context.Context, userID string) (int64, e
 	return 0, nil
 }
 
+// DeleteOthersByUserID closes every session of the user except the one with
+// the given token hash. It satisfies OtherSessionDeleter used by a password
+// change. Stores that cannot delete selectively are handled by saving and
+// restoring the current session around a full delete.
+func (m *SessionManager) DeleteOthersByUserID(ctx context.Context, userID, keepTokenHash string) (int64, error) {
+	if d, ok := m.sessions.(OtherSessionDeleter); ok {
+		return d.DeleteOthersByUserID(ctx, userID, keepTokenHash)
+	}
+	if keepTokenHash == "" {
+		if err := m.DeleteAll(ctx, userID); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	now := m.now().UTC()
+	current, err := m.sessions.GetByTokenHash(ctx, keepTokenHash, now)
+	if err != nil {
+		if err := m.DeleteAll(ctx, userID); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err := m.sessions.DeleteByUserID(ctx, userID); err != nil {
+		return 0, fmt.Errorf("auth: delete user sessions: %w", err)
+	}
+	if err := m.sessions.Create(ctx, current); err != nil {
+		return 0, fmt.Errorf("auth: restore current session: %w", err)
+	}
+	return 0, nil
+}
+
 // DeleteExpired removes expired sessions.
 func (m *SessionManager) DeleteExpired(ctx context.Context) error {
 	if err := m.sessions.DeleteExpired(ctx, m.now().UTC()); err != nil {
