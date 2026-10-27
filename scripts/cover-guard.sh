@@ -27,7 +27,9 @@ if (( head >= base )); then
 	exit 0
 fi
 
-if git log --format=%B "origin/main..HEAD" | grep -q '\[cover-lower\]'; then
+# Пометка ищется среди коммитов, тронувших Makefile: упоминание [cover-lower]
+# в тексте про политику (CONTRIBUTING) не должно легализовать понижение.
+if git log --format=%B "origin/main..HEAD" -- Makefile | grep -q '\[cover-lower\]'; then
 	echo "cover-guard: COVER_MIN снижен $base → $head с явной пометкой [cover-lower] — ок"
 	exit 0
 fi
