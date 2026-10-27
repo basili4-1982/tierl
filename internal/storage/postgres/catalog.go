@@ -39,7 +39,7 @@ func (s *Store) ListPublic(ctx context.Context, p tierlist.PageParams) (tierlist
 		       (SELECT count(*) FROM items i WHERE i.tierlist_id = t.id),
 		       (SELECT count(*) FROM submissions s WHERE s.tierlist_id = t.id)
 		FROM tierlists t
-		WHERE t.visibility = 'public' AND t.status = 'open'
+		WHERE t.visibility = 'public' AND t.status = 'open' AND t.hidden_at IS NULL
 		  AND ($1::timestamptz IS NULL OR (t.created_at, t.id) < ($1, $2))
 		ORDER BY t.created_at DESC, t.id DESC
 		LIMIT $3`, after, afterID, limit+1)

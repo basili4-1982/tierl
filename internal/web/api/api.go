@@ -62,6 +62,14 @@ type Deps struct {
 	Sessions    *auth.SessionManager
 	// CSRF overrides the process-wide CSRF token source; nil uses the default.
 	CSRF *auth.CSRF
+	// ReportHideThreshold overrides the number of reports that hides a public
+	// tier list automatically. Zero keeps the service/default value.
+	ReportHideThreshold int
+	// HideReportsThreshold is an alias for ReportHideThreshold.
+	HideReportsThreshold int
+	// ReportThreshold and ReportsThreshold are aliases.
+	ReportThreshold  int
+	ReportsThreshold int
 }
 
 // API is the HTTP handler of the JSON API.
@@ -93,6 +101,17 @@ func New(d Deps) *API {
 	}
 	if a.csrf == nil {
 		a.csrf = auth.NewCSRF(nil)
+	}
+	if a.tierlists != nil {
+		threshold := d.ReportHideThreshold
+		for _, n := range []int{d.HideReportsThreshold, d.ReportThreshold, d.ReportsThreshold} {
+			if threshold <= 0 {
+				threshold = n
+			}
+		}
+		if threshold > 0 {
+			a.tierlists.SetReportHideThreshold(threshold)
+		}
 	}
 
 	create := http.Handler(http.HandlerFunc(a.createTierlist))
@@ -126,6 +145,7 @@ func New(d Deps) *API {
 	a.mux.HandleFunc("PATCH "+Prefix+"/tierlists/{slug}", a.updateTierlist)
 	a.mux.HandleFunc("DELETE "+Prefix+"/tierlists/{slug}", a.deleteTierlist)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/close", a.closeTierlist)
+	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/reports", a.createReport)
 	a.mux.HandleFunc("POST "+Prefix+"/tierlists/{slug}/submissions", a.createSubmission)
 	a.mux.HandleFunc("PUT "+Prefix+"/tierlists/{slug}/submissions/mine", a.replaceSubmission)
 	a.mux.HandleFunc("GET "+Prefix+"/tierlists/{slug}/submissions/mine", a.getMySubmission)
@@ -224,6 +244,12 @@ func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	case errors.Is(err, tierlist.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "Нет прав на этот опрос", nil)
+	case errors.Is(err, tierlist.ErrNotModerator):
+		writeError(w, http.StatusForbidden, "forbidden", "Требуются права модератора", nil)
+	case errors.Is(err, tierlist.ErrReportDuplicate):
+		writeError(w, http.StatusConflict, "report_duplicate", "Вы уже жаловались на этот опрос", nil)
+	case errors.Is(err, tierlist.ErrTierlistHidden), errors.Is(err, tierlist.ErrReportNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
 	case errors.Is(err, tierlist.ErrEmailNotVerified):
 		writeError(w, http.StatusForbidden, "email_not_verified", "Подтвердите email, чтобы создавать опросы", nil)
 	case errors.Is(err, domain.ErrStructureLocked):

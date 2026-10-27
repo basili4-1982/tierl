@@ -46,22 +46,42 @@ type ServiceDeps struct {
 	// Lookup reads stored answers by result ID or session. When nil, a store
 	// that implements SubmissionLookup is used automatically.
 	Lookup SubmissionLookup
+	// ReportHideThreshold is the number of reports after which a public tier
+	// list is hidden automatically. Zero uses DefaultReportHideThreshold.
+	ReportHideThreshold int
+	// HideReportsThreshold is an alias for ReportHideThreshold kept for
+	// callers that name the setting after the resulting action.
+	HideReportsThreshold int
+	// ReportThreshold and ReportsThreshold are aliases kept for callers that
+	// use the shorter names.
+	ReportThreshold  int
+	ReportsThreshold int
 }
 
 // Service holds the business logic of tier list management: creation,
 // reading, editing, closing and deleting by the author.
 type Service struct {
-	store   Store
-	users   Users
-	answers Answers
-	lookup  SubmissionLookup
-	now     func() time.Time
-	rand    io.Reader
+	store           Store
+	users           Users
+	answers         Answers
+	lookup          SubmissionLookup
+	now             func() time.Time
+	rand            io.Reader
+	reportThreshold int
 }
 
 // NewService builds a Service on top of the given store and user directory.
 func NewService(store Store, users Users, deps ServiceDeps) *Service {
 	s := &Service{store: store, users: users, now: deps.Now, rand: deps.Rand}
+	s.reportThreshold = deps.ReportHideThreshold
+	for _, n := range []int{deps.HideReportsThreshold, deps.ReportThreshold, deps.ReportsThreshold} {
+		if s.reportThreshold <= 0 {
+			s.reportThreshold = n
+		}
+	}
+	if s.reportThreshold <= 0 {
+		s.reportThreshold = DefaultReportHideThreshold
+	}
 	if deps.Answers != nil {
 		s.answers = deps.Answers
 	} else if answers, ok := store.(Answers); ok {
