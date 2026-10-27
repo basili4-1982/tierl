@@ -271,7 +271,9 @@ func (c *CSRF) Token() (string, error) {
 	}
 	mac := hmac.New(sha256.New, c.secret)
 	_, _ = mac.Write(nonce)
-	raw := append(nonce, mac.Sum(nil)...)
+	raw := make([]byte, 0, len(nonce)+sha256.Size)
+	raw = append(raw, nonce...)
+	raw = append(raw, mac.Sum(nil)...)
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 

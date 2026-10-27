@@ -146,7 +146,7 @@ func (a *API) anonSession(w http.ResponseWriter, r *http.Request, create bool) (
 			return "", false
 		}
 		token = base64.RawURLEncoding.EncodeToString(b[:])
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure вычисляется по схеме запроса
 			Name:     AnonCookieName,
 			Value:    token,
 			Path:     "/",
