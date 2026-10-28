@@ -458,17 +458,14 @@ func TestMVPUnlistedNotInCatalog(t *testing.T) {
 	public := f.create(t, authorID, mvpBody)
 	publicID := mvpString(t, public, "id")
 
-	// TEMPORARY(TIERL-33): GET /api/v1/catalog arrives with the add-catalog
-	// change. Until then this storage-level check is the only way to verify
-	// that unlisted tier lists stay out of the catalog; replace it with an
-	// HTTP request once the route exists.
-	page, err := f.store.ListPublic(f.ctx, tierlist.PageParams{Limit: tierlist.MaxPageSize})
-	if err != nil {
-		t.Fatal(err)
+	code, catalog := f.do(t, http.MethodGet, "/api/v1/catalog", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("catalog: %d %v", code, catalog)
 	}
+	entries := mvpObjects(t, catalog, "items")
 	var foundPublic, foundUnlisted bool
-	for _, entry := range page.Entries {
-		switch entry.ID {
+	for _, entry := range entries {
+		switch entry["id"] {
 		case publicID:
 			foundPublic = true
 		case unlistedID:
@@ -481,7 +478,7 @@ func TestMVPUnlistedNotInCatalog(t *testing.T) {
 	if foundUnlisted {
 		t.Fatal("unlisted tier list leaked into the catalog")
 	}
-	if len(page.Entries) != 1 {
-		t.Fatalf("catalog has %d entries, want only the public one", len(page.Entries))
+	if len(entries) != 1 {
+		t.Fatalf("catalog has %d entries, want only the public one", len(entries))
 	}
 }
