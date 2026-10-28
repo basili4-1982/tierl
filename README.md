@@ -171,6 +171,7 @@ cd web && npm run dev
 
 - [`docs/SPEC.md`](docs/SPEC.md) — требования MVP;
 - [`docs/SELF-HOST.md`](docs/SELF-HOST.md) — self-host, деплой, env, миграции, health;
+- [`docs/CI.md`](docs/CI.md) — почему у PR нет проверок и как это исправить;
 - [`docs/adr/`](docs/adr/) — архитектурные решения;
 - [`api/README.md`](api/README.md) — работа с OpenAPI-контрактом;
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — процесс разработки;

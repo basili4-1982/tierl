@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Ручной запуск на ветке PR: нужен, когда проверки не появились из-за
+  # конфликта с main (см. docs/CI.md), не создавая пустой коммит.
+  workflow_dispatch:
 
 permissions:
   contents: read
