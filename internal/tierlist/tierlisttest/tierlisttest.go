@@ -4,8 +4,11 @@ package tierlisttest
 
 import (
 	"context"
+	"encoding/base64"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -210,9 +213,144 @@ func (m *MemStore) countByTierlist(id string) int {
 	return n
 }
 
-// ListPublic implements tierlist.Store; the fake has no catalog.
-func (m *MemStore) ListPublic(context.Context, tierlist.PageParams) (tierlist.CatalogPage, error) {
-	return tierlist.CatalogPage{}, nil
+// ListPublic implements tierlist.Store and mirrors the real catalog rules:
+// public+open only, optional search, sort and keyset pagination.
+func (m *MemStore) ListPublic(_ context.Context, p tierlist.PageParams) (tierlist.CatalogPage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.Errs["ListPublic"]; err != nil {
+		return tierlist.CatalogPage{}, err
+	}
+	sortBy := strings.ToLower(strings.TrimSpace(p.Sort))
+	switch sortBy {
+	case "":
+		sortBy = tierlist.CatalogSortNew
+	case tierlist.CatalogSortNew, tierlist.CatalogSortPopular:
+	default:
+		return tierlist.CatalogPage{}, tierlist.ErrBadSort
+	}
+	limit := p.Limit
+	switch {
+	case limit <= 0:
+		limit = tierlist.DefaultPageSize
+	case limit > tierlist.MaxPageSize:
+		limit = tierlist.MaxPageSize
+	}
+
+	var cur memCursor
+	hasCursor := false
+	if p.Cursor != "" {
+		decoded, err := decodeMemCursor(p.Cursor, sortBy)
+		if err != nil {
+			return tierlist.CatalogPage{}, err
+		}
+		cur, hasCursor = decoded, true
+	}
+
+	query := strings.ToLower(p.Query)
+	entries := make([]tierlist.CatalogEntry, 0)
+	for _, t := range m.byID {
+		if t.Visibility != domain.VisibilityPublic || t.Status != domain.StatusOpen {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(t.Title), query) &&
+			!strings.Contains(strings.ToLower(t.Description), query) {
+			continue
+		}
+		n := m.countByTierlist(t.ID)
+		if n == 0 {
+			n = m.subs[t.ID]
+		}
+		if hasCursor && !memCursorBefore(cur, memCursorFor(t, n), sortBy) {
+			continue
+		}
+		entries = append(entries, tierlist.CatalogEntry{
+			ID: t.ID, AuthorID: t.AuthorID, Slug: t.Slug, Title: t.Title,
+			Description: t.Description, ItemCount: len(t.Items), Submissions: n,
+			CreatedAt: t.CreatedAt,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return memEntryBefore(entries[i], entries[j], sortBy)
+	})
+	page := tierlist.CatalogPage{Entries: entries}
+	if len(page.Entries) > limit {
+		page.Entries = page.Entries[:limit]
+		last := page.Entries[limit-1]
+		page.NextCursor = encodeMemCursor(last, sortBy)
+	}
+	return page, nil
+}
+
+type memCursor struct {
+	createdAt   time.Time
+	id          string
+	submissions int
+	empty       bool
+}
+
+func memCursorFor(t domain.Tierlist, submissions int) memCursor {
+	return memCursor{createdAt: t.CreatedAt, id: t.ID, submissions: submissions}
+}
+
+func memEntryBefore(a, b tierlist.CatalogEntry, sortBy string) bool {
+	if sortBy == tierlist.CatalogSortPopular && a.Submissions != b.Submissions {
+		return a.Submissions > b.Submissions
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return a.ID > b.ID
+}
+
+// memCursorBefore reports whether e comes strictly after cur in the sort order.
+func memCursorBefore(cur, e memCursor, sortBy string) bool {
+	if cur.empty {
+		return true
+	}
+	if sortBy == tierlist.CatalogSortPopular && e.submissions != cur.submissions {
+		return e.submissions < cur.submissions
+	}
+	if !e.createdAt.Equal(cur.createdAt) {
+		return e.createdAt.Before(cur.createdAt)
+	}
+	return e.id < cur.id
+}
+
+func encodeMemCursor(e tierlist.CatalogEntry, sortBy string) string {
+	raw := strconv.FormatInt(e.CreatedAt.UnixMicro(), 10) + "|" + e.ID
+	if sortBy == tierlist.CatalogSortPopular {
+		raw += "|" + strconv.Itoa(e.Submissions)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeMemCursor(c, sortBy string) (memCursor, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return memCursor{}, tierlist.ErrBadCursor
+	}
+	parts := strings.Split(string(raw), "|")
+	want := 2
+	if sortBy == tierlist.CatalogSortPopular {
+		want = 3
+	}
+	if len(parts) != want || parts[1] == "" {
+		return memCursor{}, tierlist.ErrBadCursor
+	}
+	micro, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return memCursor{}, tierlist.ErrBadCursor
+	}
+	cur := memCursor{createdAt: time.UnixMicro(micro).UTC(), id: parts[1]}
+	if want == 3 {
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n < 0 {
+			return memCursor{}, tierlist.ErrBadCursor
+		}
+		cur.submissions = n
+	}
+	return cur, nil
 }
 
 // ListByOwner implements tierlist.OwnerStore.

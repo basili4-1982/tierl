@@ -32,6 +32,7 @@ func NewHandler(d Deps) http.Handler {
 			mux.Handle("/t/", h)
 			mux.Handle("/r/", h)
 			mux.Handle("/og/", h)
+			mux.Handle("/sitemap.xml", h)
 		}
 		if store, ok := d.API.(interface {
 			MediaHandler() (string, http.Handler)

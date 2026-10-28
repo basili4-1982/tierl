@@ -1,0 +1,43 @@
+.catalog {
+  max-width: 60rem;
+}
+
+.catalog-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  margin-block: 1.5rem;
+}
+
+.catalog-controls label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.catalog-list {
+  display: grid;
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.catalog-card {
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.catalog-card h2 {
+  margin-top: 0;
+}
+
+.catalog-card p {
+  margin-block: 0.5rem;
+}
+
+.catalog-meta {
+  color: var(--muted, #57606a);
+  font-size: 0.9rem;
+}

@@ -586,6 +586,22 @@ paths:
                 default: { $ref: '#/components/examples/CatalogPageExample' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+  /sitemap.xml:
+    servers:
+      - url: /
+        description: Корень сайта
+    get:
+      tags: [catalog]
+      operationId: getSitemap
+      summary: Sitemap публичных опросов
+      description: Содержит URL только public+open опросов и никогда не включает unlisted.
+      security: []
+      responses:
+        '200':
+          description: XML sitemap; при отсутствии опросов - валидный пустой urlset.
+          content:
+            application/xml:
+              schema: { type: string }
   /me/tierlists:
     get:
       tags: [me]

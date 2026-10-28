@@ -98,12 +98,24 @@ type StoredAnswer struct {
 	Answer similarity.Answer
 }
 
+// Catalog sort orders.
+const (
+	// CatalogSortNew orders by creation time, newest first. It is the default.
+	CatalogSortNew = "new"
+	// CatalogSortPopular orders by the number of answers, most answered first.
+	CatalogSortPopular = "popular"
+)
+
 // PageParams selects a catalog page.
 type PageParams struct {
 	// Limit is the page size, 1..MaxPageSize; 0 means DefaultPageSize.
 	Limit int
 	// Cursor is the opaque value from the previous page; empty for the first page.
 	Cursor string
+	// Sort is CatalogSortNew or CatalogSortPopular; empty means CatalogSortNew.
+	Sort string
+	// Query searches titles and descriptions; empty disables the search.
+	Query string
 }
 
 // Page size bounds.
@@ -115,6 +127,7 @@ const (
 // CatalogEntry is a tier list summary for the catalog (without items).
 type CatalogEntry struct {
 	ID          string
+	AuthorID    string
 	Slug        string
 	Title       string
 	Description string
@@ -132,6 +145,9 @@ type CatalogPage struct {
 
 // ErrBadCursor is returned for a malformed catalog cursor.
 var ErrBadCursor = errors.New("tierlist: invalid cursor")
+
+// ErrBadSort is returned for an unknown catalog sort value.
+var ErrBadSort = errors.New("tierlist: invalid sort")
 
 // OwnerEntry is a tier list summary for its author, including the state and
 // the aggregates shown on the profile page.

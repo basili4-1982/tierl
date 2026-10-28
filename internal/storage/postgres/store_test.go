@@ -373,6 +373,107 @@ func TestListPublic(t *testing.T) {
 	}
 }
 
+func TestListPublicPopularAndSearch(t *testing.T) {
+	s, _ := newStore(t)
+	ctx := context.Background()
+	lists := []struct {
+		id, slug, title, description string
+		created                      time.Time
+		visibility                   domain.Visibility
+	}{
+		{"a", "alpha-list", "Go basics", "Fast language", t0, domain.VisibilityPublic},
+		{"b", "beta-list", "Rust guide", "Safe systems", t0.Add(time.Minute), domain.VisibilityPublic},
+		{"c", "gamma-list", "Python 100% tips", "Easy_start", t0.Add(2 * time.Minute), domain.VisibilityPublic},
+		{"u", "unlisted-slug-0001", "Secret Go", "Hidden systems", t0.Add(3 * time.Minute), domain.VisibilityUnlisted},
+	}
+	for _, l := range lists {
+		tl := mk(l.id, l.slug, l.visibility, domain.StatusOpen, l.created)
+		tl.Title = l.title
+		tl.Description = l.description
+		if err := s.Create(ctx, tl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save := func(tierlistID string, n int) {
+		for i := range n {
+			_, err := s.Save(ctx, tierlist.Submission{
+				ID: fmt.Sprintf("%s-sub-%d", tierlistID, i), TierlistID: tierlistID,
+				SessionID:  fmt.Sprintf("%s-session-%d", tierlistID, i),
+				Placements: place("i0", "tS"),
+			}, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	save("a", 2)
+	save("b", 1)
+	save("c", 1)
+	save("u", 10)
+
+	var ids []string
+	cursor := ""
+	for {
+		page, err := s.ListPublic(ctx, tierlist.PageParams{
+			Limit: 2, Cursor: cursor, Sort: tierlist.CatalogSortPopular,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page.Entries {
+			ids = append(ids, e.ID)
+			if e.AuthorID != "u1" {
+				t.Errorf("author = %q", e.AuthorID)
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if fmt.Sprint(ids) != "[a c b]" {
+		t.Fatalf("popular order %v, want [a c b]", ids)
+	}
+
+	// A cursor is bound to its sort.
+	page, err := s.ListPublic(ctx, tierlist.PageParams{Limit: 1, Sort: tierlist.CatalogSortPopular})
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("popular first page: %v %+v", err, page)
+	}
+	if _, err := s.ListPublic(ctx, tierlist.PageParams{Cursor: page.NextCursor}); !errors.Is(err, tierlist.ErrBadCursor) {
+		t.Errorf("popular cursor on new sort: %v", err)
+	}
+	if _, err := s.ListPublic(ctx, tierlist.PageParams{Sort: "weird"}); !errors.Is(err, tierlist.ErrBadSort) {
+		t.Errorf("unknown sort: %v", err)
+	}
+
+	search := func(q string) []string {
+		t.Helper()
+		got, err := s.ListPublic(ctx, tierlist.PageParams{Query: q, Limit: tierlist.MaxPageSize})
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		out := make([]string, 0, len(got.Entries))
+		for _, e := range got.Entries {
+			out = append(out, e.ID)
+		}
+		return out
+	}
+	for q, want := range map[string]string{
+		"Go":       "[a]",
+		"systems":  "[b]",
+		"100%":     "[c]",
+		"%":        "[c]",
+		"_":        "[c]",
+		"Secret":   "[]",
+		"unlisted": "[]",
+	} {
+		if got := fmt.Sprint(search(q)); got != want {
+			t.Errorf("search %q = %s, want %s", q, got, want)
+		}
+	}
+}
+
 func TestMigrations(t *testing.T) {
 	newStore(t) // down + up
 	if err := postgres.MigrateUp(testURL); err != nil {
