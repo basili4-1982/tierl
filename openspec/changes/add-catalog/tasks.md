@@ -2,7 +2,7 @@
 
 ## 1. Спека и происхождение
 
-- [x] 1.1 Зафиксировать требование `catalog` из `docs/SPEC.md` (разделы 7 и 11), `api/openapi.yaml` (`/catalog`) и `ADR-004`; проверка — `openspec validate restore-catalog --strict`
+- [x] 1.1 Зафиксировать требование `catalog` из `docs/SPEC.md` (разделы 7 и 11), `api/openapi.yaml` (`/catalog`) и `ADR-004`; проверка — `openspec validate add-catalog --strict`
 - [x] 1.2 Сверить существующие части с требованием: `Store.ListPublic` фильтрует `public`+`open`, keyset-пагинация и `noindex` для unlisted уже есть; проверка — `internal/storage/postgres/catalog.go` и `internal/web/api/og.go`
 - [x] 1.3 Записать вердикт `gap` с доказательствами в `docs/audits/TIERL-6.md`; проверка — строка `- TIERL-6: gap — …` и ссылки на файлы/символы
 
@@ -30,7 +30,7 @@
 ## 5. Интеграционные проверки
 
 - [ ] 5.1 Прогнать `go test -race ./...` и убедиться, что каталог и sitemap не ломают другие маршруты
-- [ ] 5.2 Прогнать `openspec validate restore-catalog --strict` без ошибок
+- [ ] 5.2 Прогнать `openspec validate add-catalog --strict` без ошибок
 
 ## Workflow follow-up
 

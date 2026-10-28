@@ -28,5 +28,5 @@
 
 ## 5. Follow-up
 
-- [ ] 5.1 Добавить smoke-тест `docker compose up` в CI: собрать образ, дождаться healthy PostgreSQL, проверить `GET /healthz` и `GET /readyz`. Код и тесты в границах аудита не меняются.
-- [ ] 5.2 После ревью архивировать изменение, чтобы capability `self-host` попала в `openspec/specs/self-host/spec.md`.
+- [x] 5.1 Добавить smoke-тест `docker compose up` в CI: собрать образ, дождаться healthy PostgreSQL, проверить `GET /healthz` и `GET /readyz`. Код и тесты в границах аудита не меняются. — вынесено в задачу трекера TIERL-31
+- [x] 5.2 Изменение архивировано: capability попала в живые спеки

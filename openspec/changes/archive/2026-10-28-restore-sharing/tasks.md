@@ -27,4 +27,4 @@
 
 ## 5. Follow-up
 
-- [ ] 5.1 Добавить серверные тесты OG-страниц: наличие и экранирование `og:title`/`og:image`/`twitter:card` на `/t/<slug>` и `/r/<id>`, PNG 1200x630 с `Content-Type: image/png`, cache headers/`ETag` и `noindex`/`X-Robots-Tag` для unlisted. Сейчас `internal/web/api/og.go`, `internal/web/api/og_render.go` и `internal/app/og_results.go` не имеют тестов, хотя `ADR-004` этого требует. Код и тесты в границах аудита не меняются.
+- [x] 5.1 Добавить серверные тесты OG-страниц: наличие и экранирование `og:title`/`og:image`/`twitter:card` на `/t/<slug>` и `/r/<id>`, PNG 1200x630 с `Content-Type: image/png`, cache headers/`ETag` и `noindex`/`X-Robots-Tag` для unlisted. Сейчас `internal/web/api/og.go`, `internal/web/api/og_render.go` и `internal/app/og_results.go` не имеют тестов, хотя `ADR-004` этого требует. Код и тесты в границах аудита не меняются. — вынесено в задачу трекера TIERL-30
