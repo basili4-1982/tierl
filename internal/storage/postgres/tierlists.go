@@ -17,9 +17,9 @@ import (
 func (s *Store) Create(ctx context.Context, t *domain.Tierlist) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO tierlists (id, slug, author_id, title, description, visibility, status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			t.ID, t.Slug, t.AuthorID, t.Title, t.Description, string(t.Visibility), string(t.Status), t.CreatedAt, t.UpdatedAt)
+			INSERT INTO tierlists (id, slug, author_id, title, description, visibility, status, created_at, updated_at, closed_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			t.ID, t.Slug, t.AuthorID, t.Title, t.Description, string(t.Visibility), string(t.Status), t.CreatedAt, t.UpdatedAt, t.ClosedAt)
 		if err != nil {
 			return mapWriteErr("create tierlist", err)
 		}
@@ -84,9 +84,9 @@ func (s *Store) get(ctx context.Context, q querier, column, value string) (*doma
 		vis, state string
 	)
 	err := q.QueryRow(ctx, `
-		SELECT id, slug, author_id, title, description, visibility, status, created_at, updated_at
+		SELECT id, slug, author_id, title, description, visibility, status, created_at, updated_at, closed_at
 		FROM tierlists WHERE `+column+` = $1`, value).
-		Scan(&t.ID, &t.Slug, &t.AuthorID, &t.Title, &t.Description, &vis, &state, &t.CreatedAt, &t.UpdatedAt)
+		Scan(&t.ID, &t.Slug, &t.AuthorID, &t.Title, &t.Description, &vis, &state, &t.CreatedAt, &t.UpdatedAt, &t.ClosedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tierlist.ErrNotFound
 	}
@@ -167,16 +167,20 @@ func (s *Store) Update(ctx context.Context, t *domain.Tierlist) error {
 
 		_, err = tx.Exec(ctx, `
 			UPDATE tierlists
-			SET slug = $2, title = $3, description = $4, visibility = $5, status = $6, updated_at = $7
+			SET slug = $2, title = $3, description = $4, visibility = $5, status = $6, updated_at = $7, closed_at = $8
 			WHERE id = $1`,
-			t.ID, t.Slug, t.Title, t.Description, string(t.Visibility), string(t.Status), t.UpdatedAt)
+			t.ID, t.Slug, t.Title, t.Description, string(t.Visibility), string(t.Status), t.UpdatedAt, t.ClosedAt)
 		return mapWriteErr("update tierlist", err)
 	})
 }
 
 // SetStatus implements tierlist.Store.
 func (s *Store) SetStatus(ctx context.Context, id string, status domain.Status, now time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tierlists SET status = $2, updated_at = GREATEST($3, created_at) WHERE id = $1`,
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tierlists
+		SET status = $2, updated_at = GREATEST($3, created_at),
+		    closed_at = CASE WHEN $2 = 'closed' THEN $3 ELSE NULL END
+		WHERE id = $1`,
 		id, string(status), now)
 	if err != nil {
 		return mapWriteErr("set status", err)
