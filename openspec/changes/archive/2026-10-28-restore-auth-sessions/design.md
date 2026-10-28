@@ -28,7 +28,7 @@ capability для этого поведения отсутствует, поэт
 
 ## Decisions
 
-1. **Новая capability `authentication`, а не правка `author-profile`.**
+1. **Новая capability `accounts`, а не правка `author-profile`.**
    `author-profile` описывает управление профилем и своим опросом; сессии и
    CSRF — самостоятельное поведение аккаунта. Это позволяет позже добавлять
    регистрацию и восстановление пароля без раздувания `author-profile`.
@@ -56,5 +56,5 @@ capability для этого поведения отсутствует, поэт
 ## Migration Plan
 
 Изменение не требует миграции данных. После архивации требования попадут в
-`openspec/specs/authentication/spec.md`; откат — удаление новой capability до
+`openspec/specs/accounts/spec.md`; откат — удаление новой capability до
 архивации, поведение сервиса не меняется.

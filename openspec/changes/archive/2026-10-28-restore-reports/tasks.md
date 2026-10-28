@@ -27,6 +27,6 @@
 
 ## 5. Follow-up
 
-- [ ] 5.1 Добавить автоматические тесты жалоб: `internal/web/api/reports_test.go` на `201`, `404` для unlisted/hidden и `409` при повторе; тест порога и записи `auto_hide` в `internal/tierlist` и `internal/storage/postgres`. Код и тесты в границах аудита не меняются.
-- [ ] 5.2 Описать `POST /api/v1/tierlists/{slug}/reports` и коды `201`/`404`/`409`/`422` в `api/openapi.yaml`. Контракт в границах аудита не меняется.
-- [ ] 5.3 После ревью архивировать изменение, чтобы capability `reports` попала в `openspec/specs/reports/spec.md`.
+- [x] 5.1 Добавить автоматические тесты жалоб: `internal/web/api/reports_test.go` на `201`, `404` для unlisted/hidden и `409` при повторе; тест порога и записи `auto_hide` в `internal/tierlist` и `internal/storage/postgres`. Код и тесты в границах аудита не меняются. — вынесено в задачу трекера TIERL-29
+- [x] 5.2 Описать `POST /api/v1/tierlists/{slug}/reports` и коды `201`/`404`/`409`/`422` в `api/openapi.yaml`. Контракт в границах аудита не меняется. — вынесено в задачу трекера TIERL-29
+- [x] 5.3 Изменение архивировано: capability попала в живые спеки

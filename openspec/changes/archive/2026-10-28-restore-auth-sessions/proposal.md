@@ -5,13 +5,13 @@
 Серверные сессии, cookie и CSRF уже работают в коде (`internal/auth`,
 `internal/storage/postgres`, `internal/web/api`), но в OpenSpec у них нет
 capability: требования остались только в `docs/SPEC.md` (раздел 6) и
-`docs/adr/ADR-003-auth.md`. Из-за этого задачи TIERL-1, 2, 6–12 не имеют живой
+`docs/adr/ADR-003-auth.md`. Из-за этого задачи TIERL-1 не имеют живой
 цепочки «цель → спека», и проверить соответствие поведения требованию нельзя.
 Изменение восстанавливает эту цепочку без изменения поведения.
 
 ## What Changes
 
-- Добавляется capability `authentication` с требованиями к сессиям, cookie,
+- Добавляется capability `accounts` с требованиями к сессиям, cookie,
   CSRF, входу/выходу и сбросу сессий при смене пароля.
 - Фиксируется, что источник работы — цель MVP «аккаунты и безопасность»
   (`docs/SPEC.md`, раздел 6) и решение `ADR-003`.
@@ -22,7 +22,7 @@ capability: требования остались только в `docs/SPEC.md`
 
 ### New Capabilities
 
-- `authentication`: серверные сессии в Postgres, защищённая cookie, CSRF на
+- `accounts`: серверные сессии в Postgres, защищённая cookie, CSRF на
   изменяющих запросах, вход/выход и отзыв сессий при смене пароля.
 
 ### Modified Capabilities
@@ -32,10 +32,10 @@ capability: требования остались только в `docs/SPEC.md`
 
 ## Impact
 
-- Спека: новый `openspec/specs/authentication/spec.md` после архивации.
+- Спека: новый `openspec/specs/accounts/spec.md` после архивации.
 - Код: `internal/auth`, `internal/storage/postgres`, `internal/web/api`,
   `internal/app`, миграция `20261026120000_create_sessions` — только проверка
   соответствия, без изменения поведения.
 - Контракт: `api/openapi.yaml`, разделы «Сессии и CSRF» и `/auth/*`.
-- Аудит: происхождение задач TIERL-1, 2, 6–12 восстановлено; избыточный код не
+- Аудит: происхождение задач TIERL-1 восстановлено; избыточный код не
   удаляется, так как требования подтверждены действующей спекой и контрактом.

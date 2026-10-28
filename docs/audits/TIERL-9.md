@@ -119,3 +119,7 @@ change `restore-mvp-e2e` с capability `mvp-e2e`.
 
 Код, тесты, контракт и applied-миграции не изменялись. Изменены только
 `docs/audits/TIERL-9.md` и файлы `openspec/changes/restore-mvp-e2e/`.
+
+## Итог
+
+Change `restore-mvp-e2e` не оформлен как capability: сквозной тест не способность продукта, а проверка существующих. Исправления вынесены в задачу трекера TIERL-33.
