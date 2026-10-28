@@ -41,6 +41,7 @@ tags:
   - { name: auth, description: "Регистрация, вход, сессии, восстановление пароля." }
   - { name: tierlists, description: "Создание и управление опросами." }
   - { name: submissions, description: "Ответы участников, в том числе анонимные." }
+  - { name: reports, description: "Жалобы на публичные опросы и автоматическое скрытие." }
   - { name: results, description: "Результат и статистика." }
   - { name: catalog, description: "Публичный каталог." }
   - { name: me, description: "Личный кабинет." }
@@ -501,6 +502,64 @@ paths:
               examples:
                 default: { $ref: '#/components/examples/SubmissionExample' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /tierlists/{slug}/reports:
+    parameters:
+      - $ref: '#/components/parameters/Slug'
+    post:
+      tags: [reports]
+      operationId: createTierlistReport
+      summary: Пожаловаться на публичный опрос
+      description: |
+        Регистрация не нужна. Репортёр определяется по сессии (`tierl_session`),
+        а для гостя - по анонимной cookie `tierl_anon`, которая выдаётся в ответе.
+        Один репортёр может пожаловаться на опрос только один раз.
+        Жалобы принимаются только для `public` опросов; `unlisted`, скрытые и
+        несуществующие опросы неотличимо отвечают `404`.
+        После достижения порога жалоб опрос скрывается автоматически, а решение
+        записывается в аудит как `auto_hide` (`actor_role = system`).
+      security:
+        - anonSession: []
+          csrfHeader: []
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportInput' }
+            example: { reason: spam, comment: 'Ссылка на запрещённый контент' }
+      responses:
+        '201':
+          description: Жалоба принята.
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SetAnonCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Report' }
+              example:
+                id: 4b7d1c2e-0000-4000-8000-00000000bbbb
+                tierlist_id: 3f2c8a1e-0000-4000-8000-00000000aaaa
+                tierlist_slug: xK3pQ9vTz2Lm
+                reason: spam
+                comment: 'Ссылка на запрещённый контент'
+                reports_count: 1
+                hidden: false
+                created_at: '2026-10-22T09:40:00Z'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Опрос не найден, unlisted или скрыт.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: not_found, message: Не найдено }
+        '409':
+          description: Этот репортёр уже жаловался на опрос.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { code: report_duplicate, message: Вы уже жаловались на этот опрос }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
   /results/{id}:
     parameters:
       - $ref: '#/components/parameters/ResultId'
@@ -1061,6 +1120,35 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Submission' }
         next_cursor: { type: [string, 'null'] }
+    ReportInput:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 100
+          default: other
+          description: Причина жалобы; пустое значение трактуется как `other`.
+        comment:
+          type: string
+          maxLength: 2000
+        reporter:
+          type: string
+          description: >-
+            Необязательный стабильный идентификатор репортёра для клиентов,
+            у которых он уже есть. Обычно не передаётся: сервер использует
+            сессию пользователя или анонимную cookie.
+    Report:
+      type: object
+      required: [id, tierlist_id, tierlist_slug, reason, reports_count, hidden, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        tierlist_id: { type: string, format: uuid }
+        tierlist_slug: { type: string }
+        reason: { type: string }
+        comment: { type: string }
+        reports_count: { type: integer, minimum: 0, description: Число жалоб на опрос после этой жалобы. }
+        hidden: { type: boolean, description: 'true, если жалоба достигла порога и скрыла опрос.' }
+        created_at: { type: string, format: date-time }
     Result:
       type: object
       required: [submission, tierlist]
