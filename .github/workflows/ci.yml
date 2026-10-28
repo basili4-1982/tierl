@@ -57,7 +57,14 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: build image
         run: docker build -t tierl:ci .
+      - name: smoke test docker compose
+        env:
+          # Avoid clashing with services already listening on the runner.
+          TIERL_PORT: "18080"
+          POSTGRES_PORT: "15432"
+        run: make smoke
