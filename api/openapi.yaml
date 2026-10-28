@@ -401,7 +401,7 @@ paths:
         Один ответ на сессию: повторный POST даёт `409 already_submitted`
         (в `details.result_id` - существующий результат); чтобы перепройти,
         используйте `PUT /tierlists/{slug}/submissions/mine`.
-        Нужны ответы по всем элементам опроса.
+        Минимум 3 размещённых элемента, неразмещённые считаются пропущенными.
       security:
         - anonSession: []
           csrfHeader: []

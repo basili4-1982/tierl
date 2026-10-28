@@ -49,7 +49,12 @@ type listIDs struct {
 
 func createListIDs(t *testing.T, e env) listIDs {
 	t.Helper()
-	rec := e.do(t, http.MethodPost, "/tierlists", "anna", createBody)
+	return createListIDsWithBody(t, e, createBody)
+}
+
+func createListIDsWithBody(t *testing.T, e env, body string) listIDs {
+	t.Helper()
+	rec := e.do(t, http.MethodPost, "/tierlists", "anna", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
@@ -202,6 +207,74 @@ func TestResultStatsBoundariesThroughAPI(t *testing.T) {
 	for _, raw := range stats["similar"].([]any) {
 		if raw.(map[string]any)["result_id"] == "result-00" {
 			t.Fatal("similar contains the requested result")
+		}
+	}
+}
+
+func TestPartialSubmissionThroughAPI(t *testing.T) {
+	e := newEnv(t, nil)
+	body := strings.Replace(createBody,
+		`{"label":"Zig","image_url":null}`,
+		`{"label":"Zig","image_url":null},{"label":"Kotlin","image_url":null}`, 1)
+	ids := createListIDsWithBody(t, e, body)
+	if len(ids.items) != 4 {
+		t.Fatalf("items = %d", len(ids.items))
+	}
+	unplaced := ids.items[3]
+
+	rec := e.do(t, http.MethodPost, "/tierlists/"+ids.slug+"/submissions", "", submissionBody(ids, 0, 3))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("partial submit: %d %s", rec.Code, rec.Body.String())
+	}
+	sub := decodeMap(t, rec)
+	placements, _ := sub["placements"].([]any)
+	if len(placements) != 3 {
+		t.Fatalf("placements = %v", sub["placements"])
+	}
+	for _, raw := range placements {
+		if raw.(map[string]any)["item_id"] == unplaced {
+			t.Fatalf("unplaced item is in placements: %s", rec.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"session_id", "user_id", "email", "ip_address", "client_ip", "127.0.0.1", "::1"} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("submission leaks %q: %s", forbidden, rec.Body.String())
+		}
+	}
+
+	rec = e.do(t, http.MethodGet, "/tierlists/"+ids.slug, "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get tierlist: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := decodeMap(t, rec)["submissions_count"]; got != float64(1) {
+		t.Fatalf("submissions_count = %v", got)
+	}
+
+	resultID := sub["id"].(string)
+	rec = e.do(t, http.MethodGet, "/results/"+resultID+"/stats", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats: %d %s", rec.Code, rec.Body.String())
+	}
+	stats := decodeMap(t, rec)
+	if stats["total_submissions"] != float64(1) {
+		t.Fatalf("stats total = %v", stats["total_submissions"])
+	}
+	want := make(map[string]map[string]int, len(ids.items))
+	for i, itemID := range ids.items {
+		byTier := make(map[string]int, len(ids.tiers))
+		for j, tierID := range ids.tiers {
+			if i < 3 && j == 0 {
+				byTier[tierID] = 1
+			} else {
+				byTier[tierID] = 0
+			}
+		}
+		want[itemID] = byTier
+	}
+	assertTierDistribution(t, stats, ids, 1, want)
+	for _, forbidden := range []string{"session_id", "user_id", "email", "ip_address", "client_ip", "127.0.0.1", "::1"} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("stats leaks %q: %s", forbidden, rec.Body.String())
 		}
 	}
 }
