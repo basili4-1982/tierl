@@ -57,8 +57,9 @@ health:
 	curl -fsS http://localhost:$${TIERL_PORT:-8080}/healthz && echo
 	curl -fsS http://localhost:$${TIERL_PORT:-8080}/readyz && echo
 
-# Smoke-тест self-host: собирает образ, ждёт healthy PostgreSQL и readiness,
-# затем проверяет /healthz и /readyz. Всегда удаляет контейнеры и volume.
+# Smoke-тест self-host: собирает образ, ждёт healthy PostgreSQL, liveness
+# /healthz и readiness /readyz, затем проверяет оба ответа. Всегда удаляет
+# контейнеры и volume.
 smoke:
 	@set -eu; \
 	docker compose version >/dev/null; \
@@ -83,6 +84,16 @@ smoke:
 	done; \
 	echo "==> postgres is healthy"; \
 	i=0; \
+	until curl -fsS "http://localhost:$${TIERL_PORT:-8080}/healthz" >/dev/null 2>&1; do \
+		i=$$((i+1)); \
+		if [ "$$i" -ge 90 ]; then \
+			echo "app did not become live in time" >&2; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "==> app is live"; \
+	i=0; \
 	until curl -fsS "http://localhost:$${TIERL_PORT:-8080}/readyz" >/dev/null 2>&1; do \
 		i=$$((i+1)); \
 		if [ "$$i" -ge 90 ]; then \
@@ -91,9 +102,10 @@ smoke:
 		fi; \
 		sleep 2; \
 	done; \
+	echo "==> app is ready"; \
 	echo "==> checking probes"; \
-	curl -fsS "http://localhost:$${TIERL_PORT:-8080}/healthz"; \
-	curl -fsS "http://localhost:$${TIERL_PORT:-8080}/readyz"
+	curl -fsS "http://localhost:$${TIERL_PORT:-8080}/healthz"; echo; \
+	curl -fsS "http://localhost:$${TIERL_PORT:-8080}/readyz"; echo
 
 web-install:
 	cd web && npm ci
