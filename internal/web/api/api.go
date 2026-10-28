@@ -141,6 +141,8 @@ func New(d Deps) *API {
 		create = d.CreateTierlistLimit(create)
 	}
 	a.mux.HandleFunc("GET "+Prefix+"/csrf", a.getCSRF)
+	a.mux.HandleFunc("GET "+Prefix+"/catalog", a.listCatalog)
+	a.mux.HandleFunc("GET /sitemap.xml", a.sitemap)
 	if a.authService != nil && a.sessions != nil {
 		a.mux.HandleFunc("POST "+Prefix+"/auth/register", a.register)
 		a.mux.HandleFunc("POST "+Prefix+"/auth/login", a.login)
@@ -270,6 +272,8 @@ func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 	switch {
 	case errors.Is(err, tierlist.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
+	case errors.Is(err, tierlist.ErrBadCursor), errors.Is(err, tierlist.ErrBadSort):
+		writeError(w, http.StatusBadRequest, "bad_request", "Некорректный параметр запроса", nil)
 	case errors.Is(err, tierlist.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "Нет прав на этот опрос", nil)
 	case errors.Is(err, tierlist.ErrNotModerator):

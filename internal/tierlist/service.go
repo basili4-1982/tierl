@@ -219,6 +219,16 @@ func (s *Service) Get(ctx context.Context, viewerID, slug string) (*Details, err
 	return s.details(ctx, t, viewerID)
 }
 
+// ListPublic returns one page of the public catalog. The HTTP layer validates
+// the parameters; the store applies the contract page-size bounds.
+func (s *Service) ListPublic(ctx context.Context, p PageParams) (CatalogPage, error) {
+	page, err := s.store.ListPublic(ctx, p)
+	if err != nil {
+		return CatalogPage{}, fmt.Errorf("tierlist: list public: %w", err)
+	}
+	return page, nil
+}
+
 // ListMine returns the tier lists of userID with their state and aggregates.
 // A foreign tier list never appears in the result.
 func (s *Service) ListMine(ctx context.Context, userID string) ([]MyTierlist, error) {

@@ -5,6 +5,7 @@ import { authHandlers } from '../features/auth/mocks';
 import { resultHandlers } from '../features/result/handlers';
 import { tierlistEditorHandlers } from '../features/tierlist-editor/mocks';
 import { profileHandlers } from '../features/profile/mocks';
+import { catalogHandlers } from '../features/catalog/mocks';
 
 type CsrfToken = components['schemas']['CsrfToken'];
 
@@ -18,4 +19,5 @@ export const handlers = [
   ...tierlistEditorHandlers,
   ...takeTierlistHandlers,
   ...resultHandlers,
+  ...catalogHandlers,
 ];
