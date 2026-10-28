@@ -2,29 +2,35 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"code.sarnas.ru/tierl/internal/auth"
 	"code.sarnas.ru/tierl/internal/domain"
-	"code.sarnas.ru/tierl/internal/similarity"
+	"code.sarnas.ru/tierl/internal/platform/mailer/mailertest"
 	"code.sarnas.ru/tierl/internal/storage/postgres"
 	"code.sarnas.ru/tierl/internal/tierlist"
 	"code.sarnas.ru/tierl/internal/web"
+	"code.sarnas.ru/tierl/internal/web/api"
 )
 
 const (
-	mvpPassword = "correct-horse-battery"
-	mvpBody     = `{"title":"MVP languages","description":"rank them","visibility":"public","slug":"mvp-public",
+	mvpPassword     = "correct-horse-battery"
+	mvpRegisterBody = `{"email":"Anna@Example.COM","password":"correct-horse-battery","display_name":"Anna"}`
+	mvpLoginBody    = `{"email":"anna@example.com","password":"correct-horse-battery"}`
+	mvpBody         = `{"title":"MVP languages","description":"rank them","visibility":"public","slug":"mvp-public",
 "tiers":[{"name":"S","color":"#ff0000"},{"name":"A","color":"#00ff00"}],
 "items":[{"label":"Go"},{"label":"Rust"},{"label":"Zig"}]}`
 )
+
+var mvpTokenPattern = regexp.MustCompile(`[?&]token=([A-Za-z0-9_-]+)`)
 
 type mvpUsers struct {
 	store *postgres.UserStore
@@ -42,12 +48,13 @@ func (u mvpUsers) Profile(ctx context.Context, id string) (tierlist.Profile, err
 }
 
 type mvpFixture struct {
-	ctx     context.Context
-	pool    *pgxpool.Pool
-	store   *postgres.Store
-	auth    *auth.Service
-	handler http.Handler
-	author  *auth.User
+	ctx      context.Context
+	pool     *pgxpool.Pool
+	store    *postgres.Store
+	handler  http.Handler
+	mail     *mailertest.Capture
+	csrf     string
+	authorID string
 }
 
 func newMVPFixture(t *testing.T) *mvpFixture {
@@ -61,14 +68,15 @@ func newMVPFixture(t *testing.T) *mvpFixture {
 	t.Cleanup(pool.Close)
 
 	userStore := postgres.NewUserStore(pool)
+	sessions := auth.NewSessionManager(postgres.NewSessionStore(pool), auth.SessionOptions{})
+	capture := &mailertest.Capture{}
 	authSvc, err := auth.NewService(userStore, auth.Options{
-		Hash: auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	author, err := authSvc.Register(ctx, auth.RegisterInput{
-		Email: "Anna@Example.COM", Password: mvpPassword, DisplayName: "Anna",
+		Hash:     auth.HashParams{MemoryKiB: 64, Iterations: 1, Parallelism: 1},
+		Sessions: sessions,
+		Tokens:   postgres.NewTokenStore(pool),
+		Mail:     capture,
+		BaseURL:  "http://localhost:8080",
+		Log:      discardLog(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -76,37 +84,95 @@ func newMVPFixture(t *testing.T) *mvpFixture {
 
 	cfg := testConfig(url)
 	cfg.CreateTierlistBurst = 10
-	deps, closeDeps, err := newDeps(pool, cfg, discardLog(), headerAuth{}, mvpUsers{store: userStore})
+	bundle := &authBundle{
+		service: authSvc, sessions: sessions,
+		users: authUsers{users: userStore}, closeMail: func() {},
+	}
+	deps, err := buildDeps(pool, cfg, discardLog(), headerAuth{}, mvpUsers{store: userStore}, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(closeDeps)
-	return &mvpFixture{
-		ctx: ctx, pool: pool, store: postgres.New(pool), auth: authSvc,
-		handler: web.NewHandler(deps), author: author,
+	t.Cleanup(func() { closeMedia(deps) })
+
+	f := &mvpFixture{
+		ctx: ctx, pool: pool, store: postgres.New(pool),
+		handler: web.NewHandler(deps), mail: capture,
 	}
+	f.csrf = csrfToken(t, f.handler)
+	code, registered := f.do(t, http.MethodPost, "/api/v1/auth/register", "", mvpRegisterBody)
+	if code != http.StatusCreated {
+		t.Fatalf("register: %d %v", code, registered)
+	}
+	f.authorID = mvpString(t, registered, "id")
+	return f
 }
 
-func (f *mvpFixture) confirmAuthor(t *testing.T) *auth.User {
+// confirmAuthor follows the public email confirmation flow: it takes the
+// one-time token from the test mail delivery channel, verifies the address
+// over HTTP and signs in through the API.
+func (f *mvpFixture) confirmAuthor(t *testing.T) string {
 	t.Helper()
-	if _, err := f.pool.Exec(f.ctx, `
-		UPDATE users SET email_verified = true, updated_at = GREATEST(updated_at, now())
-		WHERE id = $1`, f.author.ID); err != nil {
-		t.Fatalf("confirm email: %v", err)
+	token := f.verificationToken(t)
+	code, body := f.do(t, http.MethodPost, "/api/v1/auth/verify-email", "",
+		mvpJSON(t, map[string]string{"token": token}))
+	if code != http.StatusNoContent {
+		t.Fatalf("confirm email: %d %v", code, body)
 	}
-	user, err := f.auth.Login(f.ctx, "anna@example.com", mvpPassword)
-	if err != nil {
-		t.Fatalf("login: %v", err)
+	code, user := f.do(t, http.MethodPost, "/api/v1/auth/login", "", mvpLoginBody)
+	if code != http.StatusOK {
+		t.Fatalf("login: %d %v", code, user)
 	}
-	if !user.EmailVerified {
+	if user["email_verified"] != true {
 		t.Fatal("login returned an unverified user")
 	}
-	return user
+	id := mvpString(t, user, "id")
+	if id != f.authorID {
+		t.Fatalf("login returned user %q, want %q", id, f.authorID)
+	}
+	return id
+}
+
+func (f *mvpFixture) verificationToken(t *testing.T) string {
+	t.Helper()
+	msg, ok := f.mail.Last()
+	if !ok {
+		t.Fatal("registration did not deliver a verification email")
+	}
+	for _, body := range []string{msg.Text, msg.HTML} {
+		if match := mvpTokenPattern.FindStringSubmatch(body); len(match) == 2 {
+			return match[1]
+		}
+	}
+	t.Fatal("verification email has no token link")
+	return ""
 }
 
 func (f *mvpFixture) do(t *testing.T, method, path, user, payload string) (int, map[string]any) {
 	t.Helper()
-	return call(t, f.handler, method, path, user, payload)
+	code, body, _ := f.doCookie(t, method, path, user, payload, nil)
+	return code, body
+}
+
+func (f *mvpFixture) doCookie(t *testing.T, method, path, user, payload string, cookie *http.Cookie) (int, map[string]any, []*http.Cookie) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(payload))
+	req.RemoteAddr = "203.0.113.7:4000"
+	if user != "" {
+		req.Header.Set("X-Test-User", user)
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set(api.CSRFHeader, f.csrf)
+	}
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+	var m map[string]any
+	if rec.Body.Len() > 0 {
+		_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	}
+	return rec.Code, m, rec.Result().Cookies()
 }
 
 func (f *mvpFixture) create(t *testing.T, userID, payload string) map[string]any {
@@ -116,6 +182,15 @@ func (f *mvpFixture) create(t *testing.T, userID, payload string) map[string]any
 		t.Fatalf("create: %d %v", code, created)
 	}
 	return created
+}
+
+func mvpJSON(t *testing.T, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(data)
 }
 
 func mvpString(t *testing.T, m map[string]any, key string) string {
@@ -154,16 +229,76 @@ func mvpPlacements(t *testing.T, items, tiers []map[string]any, tierIndex int) [
 	return out
 }
 
+func mvpSubmissionBody(t *testing.T, placements []tierlist.Placement) string {
+	t.Helper()
+	raw := make([]map[string]string, len(placements))
+	for i, placement := range placements {
+		raw[i] = map[string]string{"item_id": placement.ItemID, "tier_id": placement.TierID}
+	}
+	return mvpJSON(t, map[string]any{"placements": raw})
+}
+
+func mvpAnonCookie(t *testing.T, cookies []*http.Cookie) *http.Cookie {
+	t.Helper()
+	for _, cookie := range cookies {
+		if cookie.Name == api.AnonCookieName {
+			return cookie
+		}
+	}
+	t.Fatalf("response has no %s cookie", api.AnonCookieName)
+	return nil
+}
+
+func mvpAssertTier(t *testing.T, submission map[string]any, tierID string) {
+	t.Helper()
+	placements := mvpObjects(t, submission, "placements")
+	if len(placements) == 0 {
+		t.Fatal("submission has no placements")
+	}
+	for _, placement := range placements {
+		if got := mvpString(t, placement, "tier_id"); got != tierID {
+			t.Fatalf("placement tier = %q, want %q", got, tierID)
+		}
+	}
+}
+
+func mvpAssertDistribution(t *testing.T, stats map[string]any, itemCount int, want map[string]int) {
+	t.Helper()
+	items := mvpObjects(t, stats, "items")
+	if len(items) != itemCount {
+		t.Fatalf("stats has %d items, want %d: %v", len(items), itemCount, stats)
+	}
+	for _, item := range items {
+		distribution := mvpObjects(t, item, "distribution")
+		if len(distribution) != len(want) {
+			t.Fatalf("item %s has %d tiers, want %d", mvpString(t, item, "item_id"), len(distribution), len(want))
+		}
+		got := make(map[string]int, len(distribution))
+		for _, tier := range distribution {
+			count, ok := tier["count"].(float64)
+			if !ok {
+				t.Fatalf("tier %s count = %v", mvpString(t, tier, "tier_id"), tier["count"])
+			}
+			got[mvpString(t, tier, "tier_id")] = int(count)
+		}
+		for tierID, count := range want {
+			if got[tierID] != count {
+				t.Fatalf("item %s tier %s count = %d, want %d", mvpString(t, item, "item_id"), tierID, got[tierID], count)
+			}
+		}
+	}
+}
+
 func TestMVPFlowRegistrationToResult(t *testing.T) {
 	f := newMVPFixture(t)
 	const path = "/api/v1/tierlists"
 
-	if code, m := f.do(t, http.MethodPost, path, f.author.ID, mvpBody); code != http.StatusForbidden || m["code"] != "email_not_verified" {
+	if code, m := f.do(t, http.MethodPost, path, f.authorID, mvpBody); code != http.StatusForbidden || m["code"] != "email_not_verified" {
 		t.Fatalf("create before confirmation: %d %v", code, m)
 	}
 
-	author := f.confirmAuthor(t)
-	created := f.create(t, author.ID, mvpBody)
+	authorID := f.confirmAuthor(t)
+	created := f.create(t, authorID, mvpBody)
 	slug := mvpString(t, created, "slug")
 	listID := mvpString(t, created, "id")
 	if created["status"] != "open" || created["visibility"] != "public" {
@@ -184,24 +319,17 @@ func TestMVPFlowRegistrationToResult(t *testing.T) {
 	}
 
 	placements := mvpPlacements(t, items, tiers, 0)
-	now := time.Now().UTC()
 	const guests = 20
 	var firstResultID string
 	for i := range guests {
-		saved, err := f.store.Save(f.ctx, tierlist.Submission{
-			ID:         fmt.Sprintf("guest-result-%02d", i),
-			TierlistID: listID,
-			SessionID:  fmt.Sprintf("anon-session-%02d", i),
-			Placements: placements,
-		}, now.Add(time.Duration(i)*time.Second))
-		if err != nil {
-			t.Fatalf("guest %d save: %v", i, err)
+		code, saved, cookies := f.doCookie(t, http.MethodPost, path+"/"+slug+"/submissions", "",
+			mvpSubmissionBody(t, placements), nil)
+		if code != http.StatusCreated {
+			t.Fatalf("guest %d submit: %d %v", i, code, saved)
 		}
-		if saved.Replaced {
-			t.Fatalf("guest %d unexpectedly replaced an answer", i)
-		}
+		mvpAnonCookie(t, cookies)
 		if i == 0 {
-			firstResultID = saved.SubmissionID
+			firstResultID = mvpString(t, saved, "id")
 		}
 	}
 
@@ -210,104 +338,110 @@ func TestMVPFlowRegistrationToResult(t *testing.T) {
 		t.Fatalf("after guests: %d %v", code, after)
 	}
 
-	stored, err := f.store.Answers(f.ctx, listID)
-	if err != nil || len(stored) != guests {
-		t.Fatalf("answers: %v, len=%d", err, len(stored))
+	code, result := f.do(t, http.MethodGet, "/api/v1/results/"+firstResultID, "", "")
+	if code != http.StatusOK {
+		t.Fatalf("result: %d %v", code, result)
 	}
-	var mine similarity.Answer
-	others := make([]similarity.Answer, 0, len(stored)-1)
-	for _, answer := range stored {
-		if answer.ID == firstResultID {
-			mine = answer.Answer
-			continue
-		}
-		others = append(others, answer.Answer)
+	submission := result["submission"].(map[string]any)
+	if submission["id"] != firstResultID || submission["tierlist_slug"] != slug {
+		t.Fatalf("result submission = %v", submission)
 	}
-	if mine == nil {
-		t.Fatalf("result %q is missing", firstResultID)
-	}
-	result := similarity.ThinkLikeYou(mine, others, similarity.DefaultOptions(len(tiers)))
-	if result.NotEnoughData || result.Answers != guests || result.Compared != guests-1 || result.Share != 1 {
-		t.Fatalf("result = %+v", result)
+	mvpAssertTier(t, submission, mvpString(t, tiers[0], "id"))
+	if tierlistDTO := result["tierlist"].(map[string]any); tierlistDTO["submissions_count"] != float64(guests) {
+		t.Fatalf("result tierlist = %v", tierlistDTO)
 	}
 
-	distributions, err := f.store.Distributions(f.ctx, listID)
-	if err != nil || len(distributions) != len(items) {
-		t.Fatalf("distributions: %v, len=%d", err, len(distributions))
+	code, stats := f.do(t, http.MethodGet, "/api/v1/results/"+firstResultID+"/stats", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("result stats: %d %v", code, stats)
 	}
-	for _, distribution := range distributions {
-		if len(distribution.Counts) != len(tiers) || distribution.Counts[0] != guests || distribution.Counts[1] != 0 {
-			t.Fatalf("distribution %s = %v", distribution.ItemID, distribution.Counts)
-		}
+	if stats["total_submissions"] != float64(guests) || stats["insufficient_data"] != false ||
+		stats["like_you_percent"] != float64(100) {
+		t.Fatalf("result stats = %v", stats)
 	}
+	mvpAssertDistribution(t, stats, len(items), map[string]int{
+		mvpString(t, tiers[0], "id"): guests,
+		mvpString(t, tiers[1], "id"): 0,
+	})
 }
 
 func TestMVPResubmissionContract(t *testing.T) {
 	f := newMVPFixture(t)
-	author := f.confirmAuthor(t)
-	created := f.create(t, author.ID, mvpBody)
+	authorID := f.confirmAuthor(t)
+	created := f.create(t, authorID, mvpBody)
 	listID := mvpString(t, created, "id")
+	slug := mvpString(t, created, "slug")
 
-	code, shared := f.do(t, http.MethodGet, "/api/v1/tierlists/"+mvpString(t, created, "slug"), "", "")
+	code, shared := f.do(t, http.MethodGet, "/api/v1/tierlists/"+slug, "", "")
 	if code != http.StatusOK {
 		t.Fatalf("guest get: %d %v", code, shared)
 	}
 	items := mvpObjects(t, shared, "items")
 	tiers := mvpObjects(t, shared, "tiers")
+	firstTierID := mvpString(t, tiers[0], "id")
+	secondTierID := mvpString(t, tiers[1], "id")
 
-	now := time.Now().UTC()
-	first, err := f.store.Save(f.ctx, tierlist.Submission{
-		ID: "first-answer", TierlistID: listID, SessionID: "same-anon-session",
-		Placements: mvpPlacements(t, items, tiers, 0),
-	}, now)
-	if err != nil || first.Replaced {
-		t.Fatalf("first save: %v %+v", err, first)
+	code, first, cookies := f.doCookie(t, http.MethodPost, "/api/v1/tierlists/"+slug+"/submissions", "",
+		mvpSubmissionBody(t, mvpPlacements(t, items, tiers, 0)), nil)
+	if code != http.StatusCreated {
+		t.Fatalf("first submit: %d %v", code, first)
 	}
+	cookie := mvpAnonCookie(t, cookies)
+	firstID := mvpString(t, first, "id")
 
-	replaced, err := f.store.Save(f.ctx, tierlist.Submission{
-		ID: "ignored-new-id", TierlistID: listID, SessionID: "same-anon-session",
-		Placements: mvpPlacements(t, items, tiers, 1),
-	}, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
+	code, conflict, _ := f.doCookie(t, http.MethodPost, "/api/v1/tierlists/"+slug+"/submissions", "",
+		mvpSubmissionBody(t, mvpPlacements(t, items, tiers, 1)), cookie)
+	if code != http.StatusConflict || conflict["code"] != "already_submitted" {
+		t.Fatalf("repeat submit: %d %v", code, conflict)
 	}
-	if !replaced.Replaced || replaced.SubmissionID != first.SubmissionID {
-		t.Fatalf("resubmission = %+v, first id = %q", replaced, first.SubmissionID)
-	}
-	if count, err := f.store.CountSubmissions(f.ctx, listID); err != nil || count != 1 {
-		t.Fatalf("submissions after resubmission = %d %v, want 1", count, err)
-	}
-	stored, err := f.store.Answers(f.ctx, listID)
-	if err != nil || len(stored) != 1 || stored[0].ID != first.SubmissionID {
-		t.Fatalf("stored answers: %v %+v", err, stored)
-	}
-	for _, item := range items {
-		itemID := similarity.ItemID(mvpString(t, item, "id"))
-		if got := stored[0].Answer[itemID]; got != 1 {
-			t.Fatalf("item %s tier = %d, want 1", itemID, got)
-		}
+	details, _ := conflict["details"].(map[string]any)
+	if details["result_id"] != firstID {
+		t.Fatalf("repeat submit details = %v, want result_id %q", conflict["details"], firstID)
 	}
 
-	// Replacement must move the counters too: the old tier loses one and the
-	// new tier gains one, keeping exactly one answer worth of placements.
-	distributions, err := f.store.Distributions(f.ctx, listID)
-	if err != nil || len(distributions) != len(items) {
-		t.Fatalf("distributions after resubmission: %v, len=%d", err, len(distributions))
+	code, replaced, _ := f.doCookie(t, http.MethodPut, "/api/v1/tierlists/"+slug+"/submissions/mine", "",
+		mvpSubmissionBody(t, mvpPlacements(t, items, tiers, 1)), cookie)
+	if code != http.StatusOK {
+		t.Fatalf("replace submit: %d %v", code, replaced)
 	}
-	for _, distribution := range distributions {
-		if len(distribution.Counts) != len(tiers) || distribution.Counts[0] != 0 || distribution.Counts[1] != 1 {
-			t.Fatalf("distribution %s after resubmission = %v", distribution.ItemID, distribution.Counts)
-		}
+	if replaced["id"] != firstID {
+		t.Fatalf("replace changed result id: %v, want %q", replaced["id"], firstID)
 	}
+	mvpAssertTier(t, replaced, secondTierID)
+
+	code, after := f.do(t, http.MethodGet, "/api/v1/tierlists/"+slug, "", "")
+	if code != http.StatusOK || after["submissions_count"] != float64(1) {
+		t.Fatalf("after resubmission: %d %v", code, after)
+	}
+
+	code, result := f.do(t, http.MethodGet, "/api/v1/results/"+firstID, "", "")
+	if code != http.StatusOK {
+		t.Fatalf("result: %d %v", code, result)
+	}
+	if result["submission"].(map[string]any)["id"] != firstID {
+		t.Fatalf("result = %v", result)
+	}
+	if result["tierlist"].(map[string]any)["id"] != listID {
+		t.Fatalf("result tierlist = %v", result["tierlist"])
+	}
+
+	code, stats := f.do(t, http.MethodGet, "/api/v1/results/"+firstID+"/stats", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("result stats: %d %v", code, stats)
+	}
+	if stats["total_submissions"] != float64(1) {
+		t.Fatalf("resubmission changed the submission count: %v", stats)
+	}
+	mvpAssertDistribution(t, stats, len(items), map[string]int{firstTierID: 0, secondTierID: 1})
 }
 
 func TestMVPUnlistedNotInCatalog(t *testing.T) {
 	f := newMVPFixture(t)
-	author := f.confirmAuthor(t)
+	authorID := f.confirmAuthor(t)
 	const path = "/api/v1/tierlists"
 
 	unlistedBody := strings.Replace(mvpBody, `"visibility":"public"`, `"visibility":"unlisted"`, 1)
-	unlisted := f.create(t, author.ID, unlistedBody)
+	unlisted := f.create(t, authorID, unlistedBody)
 	unlistedID := mvpString(t, unlisted, "id")
 	unlistedSlug := mvpString(t, unlisted, "slug")
 	if unlistedSlug == "mvp-public" || len(unlistedSlug) < domain.MinUnlistedSlugLength {
@@ -321,9 +455,13 @@ func TestMVPUnlistedNotInCatalog(t *testing.T) {
 		t.Fatalf("unlisted by link: %d %v", code, shared)
 	}
 
-	public := f.create(t, author.ID, mvpBody)
+	public := f.create(t, authorID, mvpBody)
 	publicID := mvpString(t, public, "id")
 
+	// TEMPORARY(TIERL-33): GET /api/v1/catalog arrives with the add-catalog
+	// change. Until then this storage-level check is the only way to verify
+	// that unlisted tier lists stay out of the catalog; replace it with an
+	// HTTP request once the route exists.
 	page, err := f.store.ListPublic(f.ctx, tierlist.PageParams{Limit: tierlist.MaxPageSize})
 	if err != nil {
 		t.Fatal(err)
