@@ -189,7 +189,7 @@ func (s *Service) Hide(ctx context.Context, actorID, actorRole, slug, reason str
 		if err := s.store.SetStatus(ctx, t.ID, domain.StatusHidden, now); err != nil {
 			return nil, err
 		}
-		t.Status, t.UpdatedAt = domain.StatusHidden, now
+		t.Status, t.UpdatedAt, t.ClosedAt = domain.StatusHidden, now, nil
 		if err := s.recordAudit(ctx, t.ID, actorID, actorRole, "hide", reason, now); err != nil {
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func (s *Service) Unhide(ctx context.Context, actorID, actorRole, slug, reason s
 		if err := s.store.SetStatus(ctx, t.ID, domain.StatusOpen, now); err != nil {
 			return nil, err
 		}
-		t.Status, t.UpdatedAt = domain.StatusOpen, now
+		t.Status, t.UpdatedAt, t.ClosedAt = domain.StatusOpen, now, nil
 		if err := s.recordAudit(ctx, t.ID, actorID, actorRole, "unhide", reason, now); err != nil {
 			return nil, err
 		}

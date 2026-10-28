@@ -403,6 +403,64 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestClosedAtStableAfterTextEdit(t *testing.T) {
+	ctx := context.Background()
+	now := fixedNow
+	store := tierlisttest.NewMemStore()
+	users := tierlisttest.Users{"anna": {DisplayName: "Anna", EmailVerified: true}}
+	svc := tierlist.NewService(store, users, tierlist.ServiceDeps{
+		Now:  func() time.Time { return now },
+		Rand: rand.New(rand.NewSource(1)), //nolint:gosec // deterministic test entropy
+	})
+	if _, err := svc.Create(ctx, "anna", validCreate()); err != nil {
+		t.Fatal(err)
+	}
+
+	now = fixedNow.Add(time.Hour)
+	closed, err := svc.Close(ctx, "anna", "langs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAt := closed.ClosedAt()
+	if closedAt == nil || !closedAt.Equal(now) {
+		t.Fatalf("closed_at after close = %v, want %v", closedAt, now)
+	}
+
+	now = fixedNow.Add(2 * time.Hour)
+	edited, err := svc.Update(ctx, "anna", "langs", tierlist.UpdateInput{
+		Title:       ptr("Renamed"),
+		Description: ptr("New description"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Tierlist.Status != domain.StatusClosed {
+		t.Fatalf("status = %s after text edit, want closed", edited.Tierlist.Status)
+	}
+	if got := edited.ClosedAt(); got == nil || !got.Equal(*closedAt) {
+		t.Fatalf("closed_at moved after text edit: %v, want %v", got, closedAt)
+	}
+	if !edited.Tierlist.UpdatedAt.Equal(now) {
+		t.Fatalf("updated_at = %v, want %v", edited.Tierlist.UpdatedAt, now)
+	}
+
+	stored, err := svc.Get(ctx, "", "langs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.ClosedAt(); got == nil || !got.Equal(*closedAt) {
+		t.Fatalf("stored closed_at = %v, want %v", got, closedAt)
+	}
+
+	reopened, err := svc.Update(ctx, "anna", "langs", tierlist.UpdateInput{Status: ptr(domain.StatusOpen)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.ClosedAt() != nil || reopened.Tierlist.ClosedAt != nil {
+		t.Fatalf("closed_at not cleared on reopen: %v", reopened.ClosedAt())
+	}
+}
+
 func TestClose_StoreFailure(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)

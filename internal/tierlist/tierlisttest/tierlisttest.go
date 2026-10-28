@@ -158,6 +158,11 @@ func (m *MemStore) SetStatus(_ context.Context, id string, status domain.Status,
 		return tierlist.ErrNotFound
 	}
 	t.Status, t.UpdatedAt = status, now
+	t.ClosedAt = nil
+	if status == domain.StatusClosed {
+		closedAt := now
+		t.ClosedAt = &closedAt
+	}
 	m.byID[id] = t
 	return nil
 }
@@ -264,6 +269,11 @@ func (m *MemStore) SetStatusForOwner(_ context.Context, id, userID string, statu
 		return tierlist.ErrNotFound
 	}
 	t.Status, t.UpdatedAt = status, now
+	t.ClosedAt = nil
+	if status == domain.StatusClosed {
+		closedAt := now
+		t.ClosedAt = &closedAt
+	}
 	m.byID[id] = t
 	return nil
 }
@@ -324,7 +334,7 @@ func (m *MemStore) AddReport(_ context.Context, r tierlist.Report, threshold int
 	out := tierlist.ReportOutcome{ReportsCount: r.ReportsCount}
 	if r.ReportsCount >= threshold {
 		out.Hidden = true
-		t.Status, t.UpdatedAt = domain.StatusHidden, now
+		t.Status, t.UpdatedAt, t.ClosedAt = domain.StatusHidden, now, nil
 		m.byID[t.ID] = t
 		m.auditID++
 		m.audit = append(m.audit, tierlist.ModerationAction{

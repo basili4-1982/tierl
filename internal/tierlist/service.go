@@ -160,12 +160,11 @@ type Details struct {
 }
 
 // ClosedAt returns the moment the tier list was closed, if it is closed.
-// The domain does not keep a separate timestamp: closing is the last change.
 func (d *Details) ClosedAt() *time.Time {
-	if d.Tierlist.Status != domain.StatusClosed {
+	if d.Tierlist.Status != domain.StatusClosed || d.Tierlist.ClosedAt == nil {
 		return nil
 	}
-	t := d.Tierlist.UpdatedAt
+	t := *d.Tierlist.ClosedAt
 	return &t
 }
 
@@ -389,7 +388,8 @@ func changeStatus(t *domain.Tierlist, target domain.Status, now time.Time) error
 		case domain.StatusClosed:
 			return nil
 		case domain.StatusOpen:
-			t.Status, t.UpdatedAt = domain.StatusClosed, now
+			closedAt := now
+			t.Status, t.UpdatedAt, t.ClosedAt = domain.StatusClosed, now, &closedAt
 			return nil
 		}
 	case domain.StatusOpen:
@@ -397,7 +397,7 @@ func changeStatus(t *domain.Tierlist, target domain.Status, now time.Time) error
 		case domain.StatusOpen:
 			return nil
 		case domain.StatusClosed, domain.StatusDraft:
-			t.Status, t.UpdatedAt = domain.StatusOpen, now
+			t.Status, t.UpdatedAt, t.ClosedAt = domain.StatusOpen, now, nil
 			return nil
 		}
 	}

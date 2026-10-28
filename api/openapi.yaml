@@ -1029,6 +1029,13 @@ components:
         title: { type: string, minLength: 1, maxLength: 120 }
         description: { type: string, maxLength: 1000 }
         visibility: { $ref: '#/components/schemas/Visibility' }
+        status:
+          type: string
+          enum: [open, closed, public]
+          description: >-
+            Состояние опроса: `closed` закрывает опрос, `open` переоткрывает
+            его, а `public` — авторский синоним `open` для переоткрытия.
+            В ответе `status` всегда `open` или `closed`.
         tiers:
           type: array
           minItems: 2

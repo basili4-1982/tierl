@@ -62,6 +62,7 @@ func (s *Store) AddReport(ctx context.Context, r tierlist.Report, threshold int,
 			    status        = CASE WHEN $3 THEN 'hidden' ELSE status END,
 			    hidden_at     = CASE WHEN $3 THEN COALESCE(hidden_at, $4) ELSE hidden_at END,
 			    hidden_reason = CASE WHEN $3 THEN COALESCE(hidden_reason, $5) ELSE hidden_reason END,
+			    closed_at     = CASE WHEN $3 THEN NULL ELSE closed_at END,
 			    updated_at    = CASE WHEN $3 THEN GREATEST($4, created_at) ELSE updated_at END
 			WHERE id = $1`, r.TierlistID, count, hide, now, hiddenReason); err != nil {
 			return mapWriteErr("update report count", err)

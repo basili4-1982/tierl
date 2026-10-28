@@ -90,6 +90,9 @@ type Tierlist struct {
 	Tiers       []Tier
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// ClosedAt is the moment the tier list was closed. It stays unchanged
+	// while the author edits text and is cleared when the list is reopened.
+	ClosedAt *time.Time
 }
 
 // Deps are the injected side effects used by constructors.
@@ -269,7 +272,7 @@ func (t *Tierlist) Hide(now time.Time) error {
 	if t.Status == StatusHidden {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, t.Status, StatusHidden)
 	}
-	t.Status, t.UpdatedAt = StatusHidden, now
+	t.setStatus(StatusHidden, now)
 	return nil
 }
 
@@ -277,8 +280,19 @@ func (t *Tierlist) transition(from, to Status, now time.Time) error {
 	if t.Status != from {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, t.Status, to)
 	}
-	t.Status, t.UpdatedAt = to, now
+	t.setStatus(to, now)
 	return nil
+}
+
+func (t *Tierlist) setStatus(to Status, now time.Time) {
+	t.Status, t.UpdatedAt = to, now
+	switch to {
+	case StatusClosed:
+		closedAt := now
+		t.ClosedAt = &closedAt
+	default:
+		t.ClosedAt = nil
+	}
 }
 
 // AcceptsSubmissions reports whether answers may be submitted.

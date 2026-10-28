@@ -51,7 +51,9 @@ func (s *Store) ListByOwner(ctx context.Context, userID string) ([]tierlist.Owne
 // SetStatusForOwner implements tierlist.OwnerStore.
 func (s *Store) SetStatusForOwner(ctx context.Context, id, userID string, status domain.Status, now time.Time) error {
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE tierlists SET status = $3, updated_at = GREATEST($4, created_at)
+		UPDATE tierlists
+		SET status = $3, updated_at = GREATEST($4, created_at),
+		    closed_at = CASE WHEN $3 = 'closed' THEN $4 ELSE NULL END
 		WHERE id = $1 AND author_id = $2`, id, userID, string(status), now)
 	if err != nil {
 		return mapWriteErr("set owner status", err)
