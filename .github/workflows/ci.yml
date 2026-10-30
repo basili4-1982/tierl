@@ -1,19 +1,29 @@
 name: ci
 
+# pull_request проверяет результат слияния с main (merge-ref). push на любую
+# ветку — страховка: у конфликтующего PR merge-ref не создаётся, но проверки
+# head-коммита всё равно должны появиться. Ручной прогон нужен для диагностики
+# старого коммита без пустого коммита (см. docs/CI.md).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
-  # Аварийный ручной прогон для диагностики; штатно CI запускается сам после
-  # обновления ветки PR до main (см. docs/CI.md).
+    branches: ['**']
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+# Не теряем прогоны в очереди и не тратим минуты на устаревший head PR.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,6 +52,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
@@ -60,6 +71,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: build image

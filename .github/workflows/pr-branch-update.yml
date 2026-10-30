@@ -1,0 +1,31 @@
+name: pr-branch-update
+
+# После каждого изменения main обновляем ветки открытых PR. GitHub пересоздаёт
+# merge-ref, и pull_request-прогон CI появляется сам, без ручного «Update
+# branch» и без пустых коммитов. Конфликтующие PR автоматически обновить
+# нельзя — workflow пишет предупреждение, а причина остаётся видимой в PR.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-branch-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: update branches of open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/update-pr-branches.sh

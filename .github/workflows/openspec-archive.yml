@@ -17,12 +17,11 @@ permissions:
   contents: write
   pull-requests: write
 
-# Прогоны не теряем: очередь по умолчанию держит один pending и отменяет его
-# при следующем мерже — change из отменённого прогона остался бы неархивным.
+# Прогоны не отменяем: прерванный прогон оставил бы change неархивным.
+# Скрипт идемпотентен, поэтому повторный запуск доведёт архивацию до мержа.
 concurrency:
   group: openspec-archive
   cancel-in-progress: false
-  queue: max
 
 jobs:
   archive:
