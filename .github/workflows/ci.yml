@@ -10,6 +10,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Коммит или ветка для проверки (пусто — ветка запуска)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
           # Стражу порога покрытия нужны сообщения коммитов PR: на merge-ref
           # GitHub по умолчанию клонируется один коммит без истории.
           fetch-depth: 0
@@ -58,6 +64,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -78,6 +86,8 @@ jobs:
       POSTGRES_PORT: "15432"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
       - name: validate compose file
         run: docker compose config --quiet
       - name: build image
