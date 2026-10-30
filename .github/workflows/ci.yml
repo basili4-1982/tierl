@@ -1,16 +1,29 @@
 name: ci
 
+# pull_request проверяет результат слияния с main (merge-ref). Если ветка PR
+# отстала от main, её обновляет pr-branch-update.yml — GitHub пересоздаёт
+# merge-ref и этот workflow запускается сам. Ручной прогон нужен для
+# диагностики конкретной ветки без пустого коммита (см. docs/CI.md).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+# Не теряем прогоны в очереди и не тратим минуты на устаревший head PR.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +52,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
