@@ -1,19 +1,44 @@
 name: ci
 
+# Имя прогона содержит ref для ручного запуска: по нему
+# scripts/run-ci-for-ref.sh находит созданный workflow_dispatch и ждёт его
+# результата.
+run-name: ci ${{ inputs.ref || github.ref }}
+
+# pull_request проверяет результат слияния с main (merge-ref). Если ветка PR
+# отстала от main, её обновляет pr-branch-update.yml — GitHub пересоздаёт
+# merge-ref и этот workflow запускается сам. Ручной прогон нужен для
+# диагностики конкретной ветки или уже существующего коммита без пустого
+# коммита (см. docs/CI.md).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Коммит или ветка для проверки (пусто — ветка запуска)"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+# Не теряем прогоны в очереди и не тратим минуты на устаревший head PR.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
           # Стражу порога покрытия нужны сообщения коммитов PR: на merge-ref
           # GitHub по умолчанию клонируется один коммит без истории.
           fetch-depth: 0
@@ -39,11 +64,14 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -64,6 +92,8 @@ jobs:
       POSTGRES_PORT: "15432"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
       - name: validate compose file
         run: docker compose config --quiet
       - name: build image

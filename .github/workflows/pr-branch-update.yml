@@ -1,0 +1,38 @@
+name: pr-branch-update
+
+# После каждого изменения main обновляем ветки открытых PR и явно запускаем
+# для них ci.yml. Пуш, сделанный через GITHUB_TOKEN, не создаёт новый
+# pull_request-прогон, поэтому workflow_dispatch с head-коммитом PR — надёжный
+# способ получить проверки без ручного «Update branch» и пустых коммитов.
+# Конфликтующие PR обновить нельзя — workflow пишет предупреждение и всё равно
+# запускает CI для их текущего head-коммита.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+# Обновления не отменяем: иначе PR, обновлённый в прерванном прогоне, остался
+# бы без нового merge-ref. Скрипт идемпотентен.
+concurrency:
+  group: pr-branch-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: update branches of open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_WORKFLOW_REF: main
+        run: bash scripts/update-pr-branches.sh
