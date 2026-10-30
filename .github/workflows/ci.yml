@@ -1,5 +1,9 @@
 name: ci
 
+# Имя прогона содержит ref для ручного запуска: по нему scripts/run-ci-for-ref.sh
+# находит созданный workflow_dispatch и ждёт его результата.
+run-name: ci ${{ inputs.ref || github.ref }}
+
 # pull_request проверяет результат слияния с main (merge-ref). Если ветка PR
 # отстала от main, её обновляет pr-branch-update.yml — GitHub пересоздаёт
 # merge-ref и этот workflow запускается сам. Ручной прогон нужен для
