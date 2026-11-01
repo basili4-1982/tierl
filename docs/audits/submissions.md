@@ -28,9 +28,9 @@ ADR-002, `api/openapi.yaml` и тестами, а не создаёт спосо
 
 ## Вердикт
 
-- R1: ok — internal/web/api/submissions.go:createSubmission.Handles the anonymous POST: `anonSession` issues the `tierl_anon` cookie, `Submit`/`validatePlacements` reject foreign or duplicate items and tiers, and the handler returns `201` with result id, slug, placements and timestamps.
-- R2: ok — internal/web/api/submissions.go:decodeSubmission.Rejects fewer than 3 placements with `400 bad_request` before any cookie is issued or answer is written, while `Submit`/`validatePlacements` accept a partial answer and statistics only count placed items.
-- R3: ok — internal/tierlist/submissions.go:Submit.Enforces one answer per survey and session with `SubmissionBySession` plus the `UNIQUE (tierlist_id, session_id)` constraint, returns `409 already_submitted` with `details.result_id`, and `PUT` reuses the existing result id with `200`.
+- R1: ok — internal/web/api/submissions.go:76:createSubmission — принимает анонимный `POST`, `anonSession` выдаёт cookie `tierl_anon`, `Submit`/`validatePlacements` отклоняют чужие и повторные элементы/тиры, ответ `201` содержит id результата, slug, размещения и время.
+- R2: ok — internal/web/api/submissions.go:64:decodeSubmission — отклоняет меньше 3 размещений с `400 bad_request` до выдачи cookie и записи, а `Submit`/`validatePlacements` принимают неполный ответ; статистика учитывает только размещённые элементы.
+- R3: ok — internal/tierlist/submissions.go:77:Submit — держит один ответ на «опрос + сессию» через `SubmissionBySession` и `UNIQUE (tierlist_id, session_id)`, повторный `POST` даёт `409 already_submitted` с `details.result_id`, а `PUT` сохраняет прежний id и отвечает `200`.
 
 ## Доказательства по требованиям
 
