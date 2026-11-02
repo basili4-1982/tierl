@@ -170,11 +170,11 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 		return nil, fmt.Errorf("auth: register: %w", err)
 	}
 	now := s.now().UTC()
-	u := &User{ID: id, Email: email, DisplayName: name, PasswordHash: hash, CreatedAt: now, UpdatedAt: now}
+	// shortcut: email считается подтверждённым при регистрации без письма; демо-режим, ссылка-подтверждение не нужна; вернуть письмо и email_verified=false, если пойдёт спам или потребуется защита от чужих адресов
+	u := &User{ID: id, Email: email, DisplayName: name, PasswordHash: hash, EmailVerified: true, CreatedAt: now, UpdatedAt: now}
 	if err := s.users.Create(ctx, u); err != nil {
 		return nil, fmt.Errorf("auth: register: %w", err)
 	}
-	s.notifyVerification(ctx, u)
 	return u, nil
 }
 

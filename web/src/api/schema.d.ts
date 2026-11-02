@@ -32,7 +32,7 @@ export interface paths {
         put?: never;
         /**
          * Регистрация
-         * @description Создаёт пользователя и отправляет письмо с ссылкой подтверждения email.
+         * @description Создаёт пользователя, сразу подтверждает email и открывает сессию.
          */
         post: operations["register"];
         delete?: never;
@@ -50,8 +50,33 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Подтверждение email по токену из письма */
+        /**
+         * Подтверждение email по токену из письма
+         * @description Токен одноразовый и действует 24 часа. После подтверждения
+         *     `email_verified` становится `true`.
+         */
         post: operations["verifyEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/resend-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Повторная отправка письма подтверждения
+         * @description Ответ всегда `202`, независимо от того, существует ли email и
+         *     подтверждён ли он. Повторная выдача инвалидирует предыдущую ссылку.
+         */
+        post: operations["resendVerification"];
         delete?: never;
         options?: never;
         head?: never;
@@ -253,7 +278,7 @@ export interface paths {
          *     Один ответ на сессию: повторный POST даёт `409 already_submitted`
          *     (в `details.result_id` - существующий результат); чтобы перепройти,
          *     используйте `PUT /tierlists/{slug}/submissions/mine`.
-         *     Нужны ответы по всем элементам опроса.
+         *     Минимум 3 размещённых элемента, неразмещённые считаются пропущенными.
          */
         post: operations["createSubmission"];
         delete?: never;
@@ -280,6 +305,35 @@ export interface paths {
          */
         put: operations["replaceMySubmission"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tierlists/{slug}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Для public - читаемый, для unlisted - криптостойкий токен не короче 12 символов. */
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Пожаловаться на публичный опрос
+         * @description Регистрация не нужна. Репортёр определяется по сессии (`tierl_session`),
+         *     а для гостя - по анонимной cookie `tierl_anon`, которая выдаётся в ответе.
+         *     Один репортёр может пожаловаться на опрос только один раз.
+         *     Жалобы принимаются только для `public` опросов; `unlisted`, скрытые и
+         *     несуществующие опросы неотличимо отвечают `404`.
+         *     После достижения порога жалоб опрос скрывается автоматически, а решение
+         *     записывается в аудит как `auto_hide` (`actor_role = system`).
+         */
+        post: operations["createTierlistReport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -345,6 +399,26 @@ export interface paths {
          * @description Только `public` и не закрытые удалением опросы. Unlisted сюда не попадает.
          */
         get: operations["listCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sitemap.xml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sitemap публичных опросов
+         * @description Содержит URL только public+open опросов и никогда не включает unlisted.
+         */
+        get: operations["getSitemap"];
         put?: never;
         post?: never;
         delete?: never;
@@ -455,6 +529,10 @@ export interface components {
             /** Format: email */
             email: string;
         };
+        ResendVerificationRequest: {
+            /** Format: email */
+            email: string;
+        };
         ResetPasswordRequest: {
             token: string;
             new_password: string;
@@ -503,6 +581,11 @@ export interface components {
             title?: string;
             description?: string;
             visibility?: components["schemas"]["Visibility"];
+            /**
+             * @description Состояние опроса: `closed` закрывает опрос, `open` переоткрывает его, а `public` — авторский синоним `open` для переоткрытия. В ответе `status` всегда `open` или `closed`.
+             * @enum {string}
+             */
+            status?: "open" | "closed" | "public";
             tiers?: components["schemas"]["TierInput"][];
             items?: components["schemas"]["ItemInput"][];
         };
@@ -570,6 +653,31 @@ export interface components {
         SubmissionPage: {
             items: components["schemas"]["Submission"][];
             next_cursor: string | null;
+        };
+        ReportInput: {
+            /**
+             * @description Причина жалобы; пустое значение трактуется как `other`.
+             * @default other
+             */
+            reason: string;
+            comment?: string;
+            /** @description Необязательный стабильный идентификатор репортёра для клиентов, у которых он уже есть. Обычно не передаётся: сервер использует сессию пользователя или анонимную cookie. */
+            reporter?: string;
+        };
+        Report: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            tierlist_id: string;
+            tierlist_slug: string;
+            reason: string;
+            comment?: string;
+            /** @description Число жалоб на опрос после этой жалобы. */
+            reports_count: number;
+            /** @description true, если жалоба достигла порога и скрыла опрос. */
+            hidden: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         Result: {
             submission: components["schemas"]["Submission"];
@@ -772,7 +880,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Пользователь создан, сессия открыта (email не подтверждён). */
+            /** @description Пользователь создан, сессия открыта, email подтверждён. */
             201: {
                 headers: {
                     "Set-Cookie": components["headers"]["SetSessionCookie"];
@@ -784,7 +892,7 @@ export interface operations {
                      *       "id": "0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11",
                      *       "email": "anna@example.com",
                      *       "display_name": "Anna",
-                     *       "email_verified": false,
+                     *       "email_verified": true,
                      *       "created_at": "2026-10-22T09:00:00Z"
                      *     }
                      */
@@ -853,6 +961,37 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    resendVerification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "email": "anna@example.com"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ResendVerificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Если адрес зарегистрирован и не подтверждён, письмо отправлено. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationFailed"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -1095,6 +1234,9 @@ export interface operations {
                  *         {
                  *           "label": "Rust",
                  *           "image_url": "https://cdn.example.com/img/rust.png"
+                 *         },
+                 *         {
+                 *           "label": "Zig"
                  *         }
                  *       ]
                  *     }
@@ -1114,21 +1256,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
-            /** @description CSRF не пройден или email не подтверждён. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "code": "email_not_verified",
-                     *       "message": "Подтвердите email, чтобы создавать опросы"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationFailed"];
             429: components["responses"]["TooManyRequests"];
         };
@@ -1282,6 +1410,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000002"
                  *         }
                  *       ]
                  *     }
@@ -1362,6 +1494,10 @@ export interface operations {
                  *         {
                  *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a02",
                  *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000001"
+                 *         },
+                 *         {
+                 *           "item_id": "5d0f6c0e-1f55-4c1c-9d2a-0b4d6b3a1a03",
+                 *           "tier_id": "7a1c2d3e-0000-4000-8000-000000000003"
                  *         }
                  *       ]
                  *     }
@@ -1392,6 +1528,85 @@ export interface operations {
                      * @example {
                      *       "code": "tierlist_closed",
                      *       "message": "Опрос закрыт"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+        };
+    };
+    createTierlistReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Для public - читаемый, для unlisted - криптостойкий токен не короче 12 символов. */
+                slug: components["parameters"]["Slug"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                /**
+                 * @example {
+                 *       "reason": "spam",
+                 *       "comment": "Ссылка на запрещённый контент"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ReportInput"];
+            };
+        };
+        responses: {
+            /** @description Жалоба принята. */
+            201: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetAnonCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "id": "4b7d1c2e-0000-4000-8000-00000000bbbb",
+                     *       "tierlist_id": "3f2c8a1e-0000-4000-8000-00000000aaaa",
+                     *       "tierlist_slug": "xK3pQ9vTz2Lm",
+                     *       "reason": "spam",
+                     *       "comment": "Ссылка на запрещённый контент",
+                     *       "reports_count": 1,
+                     *       "hidden": false,
+                     *       "created_at": "2026-10-22T09:40:00Z"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Report"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            /** @description Опрос не найден, unlisted или скрыт. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "code": "not_found",
+                     *       "message": "Не найдено"
+                     *     }
+                     */
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Этот репортёр уже жаловался на опрос. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "code": "report_duplicate",
+                     *       "message": "Вы уже жаловались на этот опрос"
                      *     }
                      */
                     "application/json": components["schemas"]["Error"];
@@ -1513,6 +1728,26 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getSitemap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description XML sitemap; при отсутствии опросов - валидный пустой urlset. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/xml": string;
+                };
+            };
         };
     };
     listMyTierlists: {

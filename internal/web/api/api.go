@@ -282,8 +282,6 @@ func (a *API) writeServiceError(w http.ResponseWriter, r *http.Request, err erro
 		writeError(w, http.StatusConflict, "report_duplicate", "Вы уже жаловались на этот опрос", nil)
 	case errors.Is(err, tierlist.ErrTierlistHidden), errors.Is(err, tierlist.ErrReportNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "Не найдено", nil)
-	case errors.Is(err, tierlist.ErrEmailNotVerified):
-		writeError(w, http.StatusForbidden, "email_not_verified", "Подтвердите email, чтобы создавать опросы", nil)
 	case errors.Is(err, domain.ErrStructureLocked):
 		writeError(w, http.StatusConflict, "tierlist_locked", "Опрос уже проходили, структуру менять нельзя", nil)
 	case errors.Is(err, tierlist.ErrAlreadySubmitted):

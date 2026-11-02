@@ -38,7 +38,6 @@ func newEnv(t *testing.T, limit api.Middleware) env {
 	users := tierlisttest.Users{
 		"anna": {DisplayName: "Anna", EmailVerified: true},
 		"bob":  {DisplayName: "Bob", EmailVerified: true},
-		"newb": {DisplayName: "Newbie"},
 	}
 	svc := tierlist.NewService(store, users, tierlist.ServiceDeps{
 		Now: func() time.Time { return time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC) },
@@ -162,7 +161,6 @@ func TestCreate_Errors(t *testing.T) {
 		code   string
 	}{
 		{"guest", "", createBody, 401, "unauthorized"},
-		{"email not verified", "newb", createBody, 403, "email_not_verified"},
 		{"malformed json", "anna", `{`, 400, "bad_request"},
 		{"unknown field", "anna", `{"title":"x","nope":1}`, 400, "bad_request"},
 		{"trailing data", "anna", createBody + `{}`, 400, "bad_request"},

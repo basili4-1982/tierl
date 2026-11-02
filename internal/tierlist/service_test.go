@@ -26,7 +26,6 @@ func newEnv(t *testing.T) env {
 	users := tierlisttest.Users{
 		"anna": {DisplayName: "Anna", EmailVerified: true},
 		"bob":  {DisplayName: "Bob", EmailVerified: true},
-		"newb": {DisplayName: "Newbie", EmailVerified: false},
 	}
 	svc := tierlist.NewService(store, users, tierlist.ServiceDeps{
 		Now:  func() time.Time { return fixedNow },
@@ -95,7 +94,6 @@ func TestCreate_Errors(t *testing.T) {
 		want   error
 	}{
 		{name: "unknown user", user: "ghost", want: tierlist.ErrNotFound},
-		{name: "email not verified", user: "newb", want: tierlist.ErrEmailNotVerified},
 		{name: "empty title", user: "anna", mutate: func(in *tierlist.CreateInput) { in.Title = " " }, want: domain.ErrInvalid},
 		{name: "public without slug", user: "anna", mutate: func(in *tierlist.CreateInput) { in.Slug = "" }, want: domain.ErrInvalid},
 		{name: "too few items", user: "anna", mutate: func(in *tierlist.CreateInput) { in.Items = in.Items[:1] }, want: domain.ErrInvalid},
