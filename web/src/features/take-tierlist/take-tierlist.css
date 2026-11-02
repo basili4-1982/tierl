@@ -3,7 +3,7 @@
 }
 .take-note {
   padding: 0.5rem 0.75rem;
-  background: #eef4ff;
+  background: var(--color-hover);
   border-radius: 0.5rem;
 }
 .take-board {
@@ -51,8 +51,9 @@
 }
 .take-chip {
   position: relative;
-  background: #fff;
-  border: 1px solid #888;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 0.4rem;
 }
 .take-chip.is-dragging {
@@ -101,7 +102,7 @@
 .take-actions {
   position: sticky;
   bottom: 0;
-  background: #fff;
+  background: var(--color-bg);
   padding: 0.5rem 0;
   display: flex;
   flex-wrap: wrap;
