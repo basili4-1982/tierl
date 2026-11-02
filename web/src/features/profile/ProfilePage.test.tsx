@@ -30,7 +30,9 @@ describe('profile', () => {
     await user.click(screen.getByRole('button', { name: 'Закрыть' }));
     expect(await screen.findByText('Опрос закрыт.')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Открыть' }));
+    const row = (await screen.findByText('Открытый опрос')).closest('li');
+    if (!row) throw new Error('no row for the open list');
+    await user.click(await within(row).findByRole('button', { name: 'Открыть' }));
     expect(await screen.findByText('Опрос снова открыт.')).toBeInTheDocument();
   });
 

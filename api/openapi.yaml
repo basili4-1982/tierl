@@ -68,7 +68,7 @@ paths:
       tags: [auth]
       operationId: register
       summary: Регистрация
-      description: Создаёт пользователя и отправляет письмо с ссылкой подтверждения email.
+      description: Создаёт пользователя, сразу подтверждает email и открывает сессию.
       security:
         - csrfHeader: []
       requestBody:
@@ -79,7 +79,7 @@ paths:
             example: { email: anna@example.com, password: correct-horse-battery, display_name: Anna }
       responses:
         '201':
-          description: Пользователь создан, сессия открыта (email не подтверждён).
+          description: Пользователь создан, сессия открыта, email подтверждён.
           headers:
             Set-Cookie: { $ref: '#/components/headers/SetSessionCookie' }
           content:
@@ -89,7 +89,7 @@ paths:
                 id: 0b6f0e9e-5c1a-4a53-9a0e-8a4d1d5b7c11
                 email: anna@example.com
                 display_name: Anna
-                email_verified: false
+                email_verified: true
                 created_at: '2026-10-22T09:00:00Z'
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -302,12 +302,7 @@ paths:
                 default: { $ref: '#/components/examples/TierlistExample' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403':
-          description: CSRF не пройден или email не подтверждён.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-              example: { code: email_not_verified, message: 'Подтвердите email, чтобы создавать опросы' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
   /tierlists/{slug}:

@@ -110,7 +110,18 @@ func verificationToken(t *testing.T, msg mailer.Message) string {
 	return ""
 }
 
-func TestEmailVerificationFullPath(t *testing.T) {
+func markUnverified(t *testing.T, users *memUsers, id string) {
+	t.Helper()
+	users.mu.Lock()
+	defer users.mu.Unlock()
+	u, ok := users.byID[id]
+	if !ok {
+		t.Fatalf("user %s not found", id)
+	}
+	u.EmailVerified = false
+}
+
+func TestRegisterVerifiesEmailImmediately(t *testing.T) {
 	ctx := context.Background()
 	users := newMem()
 	tokens := &emailTokens{}
@@ -125,18 +136,56 @@ func TestEmailVerificationFullPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.EmailVerified {
-		t.Fatal("registration must not verify the email")
+	if !u.EmailVerified {
+		t.Fatal("registration must verify the email")
 	}
-	if mail.Len() != 1 {
-		t.Fatalf("registration sent %d emails, want 1", mail.Len())
+	if mail.Len() != 0 {
+		t.Fatalf("registration sent %d emails, want 0", mail.Len())
+	}
+
+	listStore := tierlisttest.NewMemStore()
+	lists := tierlist.NewService(listStore, emailProfiles{users: users}, tierlist.ServiceDeps{Now: clock})
+	input := tierlist.CreateInput{
+		Title:       "Immediately verified",
+		Description: "created right after registration",
+		Visibility:  domain.VisibilityPublic,
+		Slug:        "immediately-verified",
+		Tiers:       []tierlist.TierInput{{Name: "S", Color: "#ff0000"}, {Name: "A", Color: "#00ff00"}},
+		Items:       []tierlist.ItemInput{{Label: "Go"}, {Label: "Rust"}, {Label: "Zig"}},
+	}
+	created, err := lists.Create(ctx, u.ID, input)
+	if err != nil {
+		t.Fatalf("create without email confirmation: %v", err)
+	}
+	if created.Tierlist.Slug != input.Slug || created.Tierlist.AuthorID != u.ID {
+		t.Fatalf("created tier list = %+v", created.Tierlist)
+	}
+}
+
+// Legacy accounts created before registration started verifying the email can
+// still follow an issued confirmation link.
+func TestLegacyVerificationTokenStillWorks(t *testing.T) {
+	ctx := context.Background()
+	users := newMem()
+	tokens := &emailTokens{}
+	mail := &mailertest.Capture{}
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	svc := newEmailSvc(t, users, tokens, mail, clock)
+
+	u, err := svc.Register(ctx, RegisterInput{
+		Email: "anna@example.com", Password: goodPw, DisplayName: "Anna",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markUnverified(t, users, u.ID)
+	if err := svc.issueAndSend(ctx, u, PurposeVerifyEmail, VerifyEmailTTL); err != nil {
+		t.Fatal(err)
 	}
 	msg, ok := mail.Last()
 	if !ok {
-		t.Fatal("registration did not deliver a verification email")
-	}
-	if msg.To != "anna@example.com" || msg.Subject == "" || msg.Text == "" || msg.HTML == "" {
-		t.Fatalf("unexpected verification message: %+v", msg)
+		t.Fatal("verification email was not delivered")
 	}
 	token := verificationToken(t, msg)
 	if want := base64.RawURLEncoding.EncodedLen(oneTimeTokenBytes); len(token) != want {
@@ -161,20 +210,6 @@ func TestEmailVerificationFullPath(t *testing.T) {
 		t.Fatal("raw token is stored instead of its hash")
 	}
 
-	listStore := tierlisttest.NewMemStore()
-	lists := tierlist.NewService(listStore, emailProfiles{users: users}, tierlist.ServiceDeps{Now: clock})
-	input := tierlist.CreateInput{
-		Title:       "Email confirmation",
-		Description: "created after following the confirmation link",
-		Visibility:  domain.VisibilityPublic,
-		Slug:        "email-confirmation",
-		Tiers:       []tierlist.TierInput{{Name: "S", Color: "#ff0000"}, {Name: "A", Color: "#00ff00"}},
-		Items:       []tierlist.ItemInput{{Label: "Go"}, {Label: "Rust"}, {Label: "Zig"}},
-	}
-	if _, err := lists.Create(ctx, u.ID, input); !errors.Is(err, tierlist.ErrEmailNotVerified) {
-		t.Fatalf("create before confirmation: want ErrEmailNotVerified, got %v", err)
-	}
-
 	if err := svc.VerifyEmail(ctx, token); err != nil {
 		t.Fatalf("verify email: %v", err)
 	}
@@ -184,17 +219,6 @@ func TestEmailVerificationFullPath(t *testing.T) {
 	}
 	if !verified.EmailVerified {
 		t.Fatal("email is still unverified after following the token")
-	}
-
-	created, err := lists.Create(ctx, u.ID, input)
-	if err != nil {
-		t.Fatalf("create after confirmation: %v", err)
-	}
-	if created.Tierlist.Slug != input.Slug || created.Tierlist.AuthorID != u.ID {
-		t.Fatalf("created tier list = %+v", created.Tierlist)
-	}
-	if _, err := listStore.GetBySlug(ctx, input.Slug); err != nil {
-		t.Fatalf("created tier list is not stored: %v", err)
 	}
 
 	if err := svc.VerifyEmail(ctx, token); !errors.Is(err, ErrInvalidToken) {
@@ -234,7 +258,14 @@ func TestVerifyEmailRejectsInvalidTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg, _ := mail.Last()
+	markUnverified(t, users, u.ID)
+	if err := svc.issueAndSend(ctx, u, PurposeVerifyEmail, VerifyEmailTTL); err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := mail.Last()
+	if !ok {
+		t.Fatal("verification email was not delivered")
+	}
 	token := verificationToken(t, msg)
 
 	now = now.Add(VerifyEmailTTL + time.Second)
@@ -269,7 +300,14 @@ func TestResendVerificationInvalidatesPreviousToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _ := mail.Last()
+	markUnverified(t, users, u.ID)
+	if err := svc.issueAndSend(ctx, u, PurposeVerifyEmail, VerifyEmailTTL); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := mail.Last()
+	if !ok {
+		t.Fatal("verification email was not delivered")
+	}
 	firstToken := verificationToken(t, first)
 
 	if err := svc.ResendVerification(ctx, "ANNA@example.com"); err != nil {
@@ -309,25 +347,21 @@ func TestResendVerificationInvalidatesPreviousToken(t *testing.T) {
 	}
 }
 
-func TestRegisterSurvivesDeliveryFailure(t *testing.T) {
+func TestResendVerificationHidesDeliveryFailure(t *testing.T) {
 	ctx := context.Background()
 	users := newMem()
 	tokens := &emailTokens{}
 	mail := &mailertest.Capture{}
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	svc := newEmailSvc(t, users, tokens, mail, func() time.Time { return now })
-	mail.SetError(errors.New("smtp down"))
 
 	u, err := svc.Register(ctx, RegisterInput{Email: "anna@example.com", Password: goodPw, DisplayName: "Anna"})
 	if err != nil {
-		t.Fatalf("registration must not fail when delivery fails: %v", err)
+		t.Fatalf("registration failed: %v", err)
 	}
-	if _, err := users.GetByID(ctx, u.ID); err != nil {
-		t.Fatalf("account was not created: %v", err)
-	}
-	if mail.Len() != 0 {
-		t.Fatalf("captured %d failed messages, want 0", mail.Len())
-	}
+	markUnverified(t, users, u.ID)
+	mail.SetError(errors.New("smtp down"))
+
 	if err := svc.ResendVerification(ctx, u.Email); err != nil {
 		t.Fatalf("resend must hide delivery failures: %v", err)
 	}

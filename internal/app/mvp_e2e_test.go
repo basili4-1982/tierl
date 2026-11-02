@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -30,8 +29,6 @@ const (
 "items":[{"label":"Go"},{"label":"Rust"},{"label":"Zig"}]}`
 )
 
-var mvpTokenPattern = regexp.MustCompile(`[?&]token=([A-Za-z0-9_-]+)`)
-
 type mvpUsers struct {
 	store *postgres.UserStore
 }
@@ -52,7 +49,6 @@ type mvpFixture struct {
 	pool     *pgxpool.Pool
 	store    *postgres.Store
 	handler  http.Handler
-	mail     *mailertest.Capture
 	csrf     string
 	authorID string
 }
@@ -96,7 +92,7 @@ func newMVPFixture(t *testing.T) *mvpFixture {
 
 	f := &mvpFixture{
 		ctx: ctx, pool: pool, store: postgres.New(pool),
-		handler: web.NewHandler(deps), mail: capture,
+		handler: web.NewHandler(deps),
 	}
 	f.csrf = csrfToken(t, f.handler)
 	code, registered := f.do(t, http.MethodPost, "/api/v1/auth/register", "", mvpRegisterBody)
@@ -107,17 +103,10 @@ func newMVPFixture(t *testing.T) *mvpFixture {
 	return f
 }
 
-// confirmAuthor follows the public email confirmation flow: it takes the
-// one-time token from the test mail delivery channel, verifies the address
-// over HTTP and signs in through the API.
+// confirmAuthor signs the author in through the API. Registration confirms the
+// email immediately, so there is no confirmation link to follow.
 func (f *mvpFixture) confirmAuthor(t *testing.T) string {
 	t.Helper()
-	token := f.verificationToken(t)
-	code, body := f.do(t, http.MethodPost, "/api/v1/auth/verify-email", "",
-		mvpJSON(t, map[string]string{"token": token}))
-	if code != http.StatusNoContent {
-		t.Fatalf("confirm email: %d %v", code, body)
-	}
 	code, user := f.do(t, http.MethodPost, "/api/v1/auth/login", "", mvpLoginBody)
 	if code != http.StatusOK {
 		t.Fatalf("login: %d %v", code, user)
@@ -130,21 +119,6 @@ func (f *mvpFixture) confirmAuthor(t *testing.T) string {
 		t.Fatalf("login returned user %q, want %q", id, f.authorID)
 	}
 	return id
-}
-
-func (f *mvpFixture) verificationToken(t *testing.T) string {
-	t.Helper()
-	msg, ok := f.mail.Last()
-	if !ok {
-		t.Fatal("registration did not deliver a verification email")
-	}
-	for _, body := range []string{msg.Text, msg.HTML} {
-		if match := mvpTokenPattern.FindStringSubmatch(body); len(match) == 2 {
-			return match[1]
-		}
-	}
-	t.Fatal("verification email has no token link")
-	return ""
 }
 
 func (f *mvpFixture) do(t *testing.T, method, path, user, payload string) (int, map[string]any) {
@@ -292,10 +266,6 @@ func mvpAssertDistribution(t *testing.T, stats map[string]any, itemCount int, wa
 func TestMVPFlowRegistrationToResult(t *testing.T) {
 	f := newMVPFixture(t)
 	const path = "/api/v1/tierlists"
-
-	if code, m := f.do(t, http.MethodPost, path, f.authorID, mvpBody); code != http.StatusForbidden || m["code"] != "email_not_verified" {
-		t.Fatalf("create before confirmation: %d %v", code, m)
-	}
 
 	authorID := f.confirmAuthor(t)
 	created := f.create(t, authorID, mvpBody)

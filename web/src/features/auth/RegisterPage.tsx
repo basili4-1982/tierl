@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { register } from './api';
 import { AuthForm, TextField } from './AuthForm';
 import { ME_KEY } from './session';
@@ -9,35 +9,20 @@ import { useFormFeedback } from './useFormFeedback';
 
 export function RegisterPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const fb = useFormFeedback();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [done, setDone] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: register,
     onSuccess: (user) => {
       qc.setQueryData(ME_KEY, user);
-      setDone(user.email);
+      void navigate('/', { replace: true });
     },
     onError: (err) => fb.fail(err),
   });
-
-  if (done) {
-    return (
-      <main>
-        <h1>Проверьте почту</h1>
-        <p role="status">
-          Мы отправили ссылку для подтверждения на {done}. Без подтверждения email создавать опросы
-          нельзя.
-        </p>
-        <p>
-          <Link to="/">На главную</Link>
-        </p>
-      </main>
-    );
-  }
 
   return (
     <AuthForm

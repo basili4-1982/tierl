@@ -193,18 +193,6 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	return nil
 }
 
-// notifyVerification sends a confirmation letter after registration. The
-// account is created even when delivery fails; the user can resend later.
-func (s *Service) notifyVerification(ctx context.Context, u *User) {
-	if s.tokens == nil || s.mail == nil {
-		return
-	}
-	if err := s.issueAndSend(ctx, u, PurposeVerifyEmail, VerifyEmailTTL); err != nil {
-		s.log.ErrorContext(ctx, "auth: send verification email failed",
-			slog.String("user_id", u.ID), slog.Any("error", err))
-	}
-}
-
 // issueAndSend creates a token (invalidating the previous one) and delivers
 // the letter. The error never contains the token or the link.
 func (s *Service) issueAndSend(ctx context.Context, u *User, purpose Purpose, ttl time.Duration) error {

@@ -18,8 +18,6 @@ import (
 var (
 	// ErrForbidden is returned when the caller is not the author of the tier list.
 	ErrForbidden = errors.New("tierlist: forbidden")
-	// ErrEmailNotVerified is returned when a user without a confirmed email creates a tier list.
-	ErrEmailNotVerified = errors.New("tierlist: email not verified")
 )
 
 // Profile is the part of a user account the service needs.
@@ -175,10 +173,6 @@ func (s *Service) Create(ctx context.Context, userID string, in CreateInput) (*D
 	if err != nil {
 		return nil, fmt.Errorf("tierlist: load author: %w", err)
 	}
-	if !prof.EmailVerified {
-		return nil, ErrEmailNotVerified
-	}
-
 	id, err := s.newID()
 	if err != nil {
 		return nil, err

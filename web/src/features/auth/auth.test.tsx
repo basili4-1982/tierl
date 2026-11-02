@@ -67,7 +67,7 @@ describe('register', () => {
     expect(screen.getByLabelText('Пароль')).toHaveAttribute('aria-invalid', 'true');
   });
 
-  it('registers, sends the CSRF header and shows the check-your-mail state', async () => {
+  it('registers, sends the CSRF header and lands on the home page signed in', async () => {
     const user = userEvent.setup();
     let csrf: string | null = null;
     server.events.on('request:start', ({ request }) => {
@@ -78,8 +78,7 @@ describe('register', () => {
     await user.type(screen.getByLabelText('Email'), 'bob@example.com');
     await user.type(screen.getByLabelText('Пароль'), 'a-long-enough-password');
     await user.click(screen.getByRole('button', { name: 'Зарегистрироваться' }));
-    expect(await screen.findByRole('heading', { name: 'Проверьте почту' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('bob@example.com');
+    expect(await screen.findByRole('heading', { name: 'Домой' })).toBeInTheDocument();
     expect(csrf).toBe('test-csrf-token');
     expect(client.getQueryData(['auth', 'me'])).toMatchObject({ email: 'bob@example.com' });
     server.events.removeAllListeners();

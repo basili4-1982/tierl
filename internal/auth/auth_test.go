@@ -311,7 +311,7 @@ func TestRegisterLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Email != "anna@example.com" || u.DisplayName != "Anna" || u.EmailVerified || len(u.ID) != 36 || u.ID[14] != '4' {
+	if u.Email != "anna@example.com" || u.DisplayName != "Anna" || !u.EmailVerified || len(u.ID) != 36 || u.ID[14] != '4' {
 		t.Fatalf("unexpected user: %+v", u)
 	}
 	if strings.Contains(u.PasswordHash, goodPw) {
