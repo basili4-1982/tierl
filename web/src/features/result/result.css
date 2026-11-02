@@ -38,6 +38,15 @@
   padding: 0.25rem 0.5rem;
   background: var(--color-surface);
   border-radius: 0.375rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.result-tier__img {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: cover;
+  border-radius: 0.25rem;
 }
 .result-big {
   font-size: 1.25rem;
@@ -59,6 +68,17 @@
 }
 .result-item {
   margin-bottom: 1rem;
+}
+.result-item__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.result-item__img {
+  width: 2rem;
+  height: 2rem;
+  object-fit: cover;
+  border-radius: 0.25rem;
 }
 .result-bar {
   display: grid;

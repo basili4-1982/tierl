@@ -39,6 +39,29 @@ describe('ResultPage', () => {
     expect(screen.getByText(/не меньше чем на 80%/)).toHaveTextContent('Всего ответов: 42');
   });
 
+  it('renders item images from the result API', async () => {
+    server.use(
+      http.get('/api/v1/results/:id', () =>
+        HttpResponse.json({
+          ...sampleResult,
+          tierlist: {
+            ...sampleResult.tierlist,
+            items: sampleResult.tierlist.items.map((item) => ({
+              ...item,
+              image_url: 'https://x.test/cover.png',
+            })),
+          },
+        }),
+      ),
+    );
+    renderPage();
+    const tier = await screen.findByRole('region', { name: 'S, элементов: 1' });
+    const chip = within(tier).getByText('Go').closest('li');
+    expect(chip?.querySelector('img')).toHaveAttribute('src', 'https://x.test/cover.png');
+    const heading = await screen.findByRole('heading', { name: 'Go' });
+    expect(heading.querySelector('img')).toHaveAttribute('src', 'https://x.test/cover.png');
+  });
+
   it('describes each bar in text, marks own choice, lists anonymous similar answers', async () => {
     renderPage();
     const bar = await screen.findByRole('img', { name: 'Тир S: 47,6%, ответов: 20, ваш выбор' });
