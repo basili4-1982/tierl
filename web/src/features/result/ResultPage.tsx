@@ -105,7 +105,12 @@ function MyPlacement({ result }: { result: Result }) {
               </h3>
               <ul className="result-tier__items">
                 {inTier.map((i) => (
-                  <li key={i.id}>{i.label}</li>
+                  <li key={i.id}>
+                    {i.image_url ? (
+                      <img src={i.image_url} alt="" className="result-tier__img" loading="lazy" />
+                    ) : null}
+                    {i.label}
+                  </li>
                 ))}
               </ul>
             </section>
@@ -146,6 +151,7 @@ function LikeYou({ stats }: { stats: ResultStats }) {
 function Distribution({ result, stats }: { result: Result; stats: ResultStats }) {
   const { tierlist, submission } = result;
   const tiers = [...tierlist.tiers].sort((a, b) => a.position - b.position);
+  const images = new Map(tierlist.items.map((i) => [i.id, i.image_url]));
   const mine = new Map(submission.placements.map((p) => [p.item_id, p.tier_id]));
   return (
     <section aria-labelledby="dist-title">
@@ -153,9 +159,13 @@ function Distribution({ result, stats }: { result: Result; stats: ResultStats })
       <ul className="result-items">
         {stats.items.map((item) => {
           const byTier = new Map(item.distribution.map((d) => [d.tier_id, d]));
+          const img = images.get(item.item_id);
           return (
             <li key={item.item_id} className="result-item">
-              <h3>{item.label}</h3>
+              <h3 className="result-item__title">
+                {img ? <img src={img} alt="" className="result-item__img" loading="lazy" /> : null}
+                {item.label}
+              </h3>
               <ul className="result-bars">
                 {tiers.map((tier) => {
                   const d = byTier.get(tier.id);
