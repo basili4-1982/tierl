@@ -138,6 +138,9 @@ describe('ResultPage', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('37,5%');
+    expect(screen.getByLabelText('Ссылка на результат')).toHaveValue(
+      `${window.location.origin}/r/${sampleResult.submission.id}`,
+    );
     await user.click(screen.getByRole('button', { name: 'Поделиться ссылкой' }));
     expect(screen.getByText('Ссылка скопирована.')).toBeInTheDocument();
     expect(await navigator.clipboard.readText()).toBe(

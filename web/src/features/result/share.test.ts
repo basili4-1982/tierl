@@ -8,6 +8,7 @@ beforeEach(() => {
 
 afterEach(() => {
   Reflect.deleteProperty(navigator, 'share');
+  Reflect.deleteProperty(document, 'execCommand');
   vi.restoreAllMocks();
 });
 
@@ -26,8 +27,20 @@ describe('shareLink', () => {
     expect(writeText).toHaveBeenCalledWith('http://x/r/1');
   });
 
+  it('falls back to execCommand when the clipboard is denied', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    const exec = vi.fn().mockReturnValue(true);
+    Object.defineProperty(document, 'execCommand', { value: exec, configurable: true });
+    expect(await copyLink('http://x/r/1')).toBe('copied');
+    expect(exec).toHaveBeenCalledWith('copy');
+  });
+
   it('reports a clipboard failure', async () => {
     writeText.mockRejectedValue(new Error('denied'));
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn().mockReturnValue(false),
+      configurable: true,
+    });
     expect(await copyLink('u')).toBe('failed');
   });
 });

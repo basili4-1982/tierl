@@ -122,3 +122,13 @@
   gap: 1rem;
   margin-top: 1.5rem;
 }
+.result-share__link {
+  flex: 1 1 18rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}

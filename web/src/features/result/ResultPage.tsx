@@ -233,20 +233,29 @@ function SimilarList({ title, list }: { title: string; list: ResultStats['simila
 
 function Actions({ resultId, slug, title }: { resultId: string; slug: string; title: string }) {
   const [message, setMessage] = useState('');
+  const url = `${window.location.origin}/r/${encodeURIComponent(resultId)}`;
   const onShare = async () => {
-    const url = `${window.location.origin}/r/${encodeURIComponent(resultId)}`;
     const outcome = await shareLink(url, title);
     setMessage(
       {
         shared: 'Ссылка отправлена.',
         copied: 'Ссылка скопирована.',
-        failed: 'Не удалось скопировать ссылку.',
+        failed: 'Не удалось скопировать ссылку — выделите её и скопируйте вручную.',
         cancelled: '',
       }[outcome],
     );
   };
   return (
     <section aria-label="Действия" className="result-actions">
+      <input
+        className="result-share__link"
+        type="text"
+        readOnly
+        value={url}
+        aria-label="Ссылка на результат"
+        onFocus={(e) => e.currentTarget.select()}
+        onClick={(e) => e.currentTarget.select()}
+      />
       <button type="button" onClick={() => void onShare()}>
         Поделиться ссылкой
       </button>
