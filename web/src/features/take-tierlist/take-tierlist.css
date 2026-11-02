@@ -82,6 +82,8 @@
   width: 2rem;
   height: 2rem;
   object-fit: cover;
+  /* Wide banner covers crop to characters instead of empty sky. */
+  object-position: 30% center;
   border-radius: 0.25rem;
 }
 /* Select-based move: a screen-reader and no-drag fallback, shown on focus. */
